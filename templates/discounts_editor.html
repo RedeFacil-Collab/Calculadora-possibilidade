@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Fatores por Banco</title>
+    <link rel="stylesheet" href="{{ asset_url('styles.css') }}">
+  </head>
+  <body>
+    <div class="app-bg"></div>
+    <main class="page-shell editor-shell">
+      <section class="editor-hero">
+        <div>
+          <h1>Fatores por Banco</h1>
+        </div>
+        <a class="action-btn action-muted" href="{{ url_for('index') }}">Voltar</a>
+      </section>
+
+      {% if saved %}
+        <div class="editor-alert editor-success">Arquivo salvo com sucesso.</div>
+      {% endif %}
+      {% if error %}
+        <div class="editor-alert editor-error">{{ error }}</div>
+      {% endif %}
+
+      <section class="panel bank-management-panel">
+        <div class="bank-panel-head">
+          <span class="bank-panel-accent"></span>
+          <div>
+            <h2>Descontos do Pos-venda</h2>
+          </div>
+        </div>
+
+        <form method="post" class="editor-form editor-section-form">
+          <input type="hidden" name="form_type" value="discounts">
+          <div class="editor-table-wrap">
+            <table class="editor-table">
+              <thead>
+                <tr>
+                  <th>Nome do Desconto</th>
+                  <th>Percentual</th>
+                  <th class="editor-actions-col">Acao</th>
+                </tr>
+              </thead>
+              <tbody id="discount-table-body">
+                {% for item in discounts %}
+                  <tr class="editor-row discount-row">
+                    <td>
+                      <input name="discount_name" type="text" value="{{ item['name'] }}" placeholder="Ex.: BB - Quitacao">
+                    </td>
+                    <td>
+                      <input name="discount_percent" type="number" step="0.01" value="{{ item['percent'] }}" placeholder="0.00">
+                    </td>
+                    <td class="editor-actions-col">
+                      <button class="action-btn action-danger action-small remove-row-btn" type="button">Remover</button>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="toolbar editor-section-toolbar">
+            <button id="add-discount-row" class="action-btn action-muted" type="button">Adicionar desconto</button>
+            <button class="action-btn action-primary" type="submit">Salvar descontos</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel bank-management-panel">
+        <div class="bank-panel-head">
+          <span class="bank-panel-accent"></span>
+          <div>
+            <h2>Adicionar Novo Banco</h2>
+          </div>
+        </div>
+
+        <form method="post" enctype="multipart/form-data" class="bank-add-form">
+          <input type="hidden" name="form_type" value="add_bank">
+          <div class="bank-add-grid">
+            <label class="bank-field">
+              <span>Nome do banco</span>
+              <input name="bank_name" type="text" placeholder="Ex: Itau, Bradesco" required>
+            </label>
+            <label class="bank-field">
+              <span>Imagem/Logo do banco</span>
+              <input name="bank_logo" type="file" accept=".png,.jpg,.jpeg,.webp,.svg">
+            </label>
+            <div class="bank-add-action">
+              <button class="action-btn action-primary action-strong" type="submit">+ Adicionar banco</button>
+            </div>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel bank-management-panel">
+        <div class="bank-panel-head">
+          <span class="bank-panel-accent"></span>
+          <div>
+            <h2>Resumo por banco</h2>
+          </div>
+        </div>
+
+        <div id="bank-summary-grid-normal" class="bank-summary-grid"></div>
+      </section>
+
+      <section class="panel bank-management-panel">
+        <div class="bank-panel-head">
+          <span class="bank-panel-accent"></span>
+          <div>
+            <h2>Bancos TJ</h2>
+          </div>
+        </div>
+
+        <div id="bank-summary-grid-tj" class="bank-summary-grid"></div>
+      </section>
+
+      <form id="bank-factors-form" method="post">
+        <input type="hidden" name="form_type" value="bank_factors_payload">
+        <input type="hidden" id="bank-factors-payload" name="bank_factors_payload" value="">
+      </form>
+    </main>
+
+    <div id="bank-modal-overlay" class="bank-modal-overlay hidden">
+      <div class="bank-modal">
+        <div class="bank-modal-header">
+          <div>
+            <h3 id="bank-modal-title">Banco</h3>
+            <p id="bank-modal-subtitle">0 fatores cadastrados</p>
+          </div>
+          <button id="close-bank-modal" class="action-btn action-muted" type="button">Fechar</button>
+        </div>
+
+        <form method="post" enctype="multipart/form-data" class="bank-modal-logo-form">
+          <input type="hidden" name="form_type" value="modal_bank_logo">
+          <input type="hidden" id="modal-bank-name" name="modal_bank_name" value="">
+          <input type="hidden" id="modal-bank-product" value="normal">
+          <div class="bank-modal-logo-row">
+            <div id="bank-modal-logo-preview" class="bank-modal-logo-preview">
+              <div class="bank-summary-logo-fallback">Sem logo</div>
+            </div>
+            <label class="bank-field compact">
+              <span>Imagem/Logo do banco</span>
+              <input name="modal_bank_logo" type="file" accept=".png,.jpg,.jpeg,.webp,.svg">
+            </label>
+            <div class="bank-modal-add-action">
+              <button class="action-btn action-muted" type="submit">Salvar logo</button>
+            </div>
+          </div>
+        </form>
+
+        <div class="bank-modal-add-row">
+          <label class="bank-field compact">
+            <span>Prazo (parcelas)</span>
+            <input id="new-factor-installments" type="number" min="1" step="1" placeholder="120">
+          </label>
+          <label class="bank-field compact">
+            <span>Fator</span>
+            <input id="new-factor-value" type="number" min="0" step="0.000001" placeholder="0.018930">
+          </label>
+          <div class="bank-modal-add-action">
+            <button id="add-factor-to-modal" class="action-btn action-primary action-strong" type="button">Adicionar fator</button>
+          </div>
+        </div>
+
+        <div id="bank-modal-list" class="bank-modal-list"></div>
+
+        <div class="bank-modal-footer">
+          <button id="save-bank-factors" class="action-btn action-primary" type="button">Salvar alteracoes</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      window.BANK_GROUPS_NORMAL = {{ bank_groups_normal|tojson }};
+      window.BANK_GROUPS_TJ = {{ bank_groups_tj|tojson }};
+    </script>
+    <script>
+      function bindDiscountRemoveButtons() {
+        document.querySelectorAll('#discount-table-body .remove-row-btn').forEach((button) => {
+          button.onclick = () => {
+            const rows = document.querySelectorAll('#discount-table-body .discount-row');
+            if (rows.length <= 1) {
+              rows[0].querySelectorAll('input').forEach((input) => {
+                input.value = '';
+              });
+              return;
+            }
+            button.closest('.discount-row').remove();
+          };
+        });
+      }
+
+      const bankState = [
+        ...(window.BANK_GROUPS_NORMAL || []).map((group) => ({
+          bank: group.bank,
+          logo_url: group.logo_url || '',
+          product: 'normal',
+          factors: (group.factors || []).map((item) => ({
+            installments: Number(item.installments || 0),
+            factor: Number(item.factor || 0),
+          })),
+        })),
+        ...(window.BANK_GROUPS_TJ || []).map((group) => ({
+          bank: group.bank,
+          logo_url: group.logo_url || '',
+          product: 'tj',
+          factors: (group.factors || []).map((item) => ({
+            installments: Number(item.installments || 0),
+            factor: Number(item.factor || 0),
+          })),
+        })),
+      ];
+
+      let activeBankIndex = null;
+
+      function escapeHtml(value) {
+        return String(value || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function formatFactor(value) {
+        return Number(value || 0).toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
+      }
+
+      function sortFactors(items) {
+        return [...items].sort((a, b) => Number(a.installments || 0) - Number(b.installments || 0));
+      }
+
+      function renderBankSummaryForProduct(product, targetId) {
+        const container = document.getElementById(targetId);
+        const filtered = bankState
+          .map((group, index) => ({ ...group, stateIndex: index }))
+          .filter((group) => group.product === product);
+
+        if (!filtered.length) {
+          container.innerHTML = '<div class="empty-factor-state">Nenhum banco cadastrado.</div>';
+          return;
+        }
+
+        container.innerHTML = filtered.map((group) => `
+          <button class="bank-summary-card" type="button" data-bank-index="${group.stateIndex}">
+            <div class="bank-summary-logo-wrap">
+              ${group.logo_url ? `<img src="${escapeHtml(group.logo_url)}" alt="Logo ${escapeHtml(group.bank)}" class="bank-summary-logo">` : '<div class="bank-summary-logo-fallback">Sem logo</div>'}
+            </div>
+            <div class="bank-summary-meta">
+              <strong>${escapeHtml(group.bank)}</strong>
+              <span>${group.factors.length} fatores cadastrados</span>
+              <small>${product === 'tj' ? 'Tabela TJ' : 'Tabela normal'}</small>
+            </div>
+          </button>
+        `).join('');
+
+        container.querySelectorAll('[data-bank-index]').forEach((button) => {
+          button.addEventListener('click', () => openBankModal(Number(button.dataset.bankIndex)));
+        });
+      }
+
+      function renderBankSummary() {
+        renderBankSummaryForProduct('normal', 'bank-summary-grid-normal');
+        renderBankSummaryForProduct('tj', 'bank-summary-grid-tj');
+      }
+
+      function openBankModal(index) {
+        activeBankIndex = index;
+        const group = bankState[index];
+        document.getElementById('bank-modal-title').textContent = group.bank;
+        document.getElementById('bank-modal-subtitle').textContent = `${group.product === 'tj' ? 'Tabela TJ' : 'Tabela normal'} - ${group.factors.length} fatores cadastrados`;
+        document.getElementById('modal-bank-name').value = group.bank;
+        document.getElementById('modal-bank-product').value = group.product;
+        document.getElementById('bank-modal-logo-preview').innerHTML = group.logo_url
+          ? `<img src="${escapeHtml(group.logo_url)}" alt="Logo ${escapeHtml(group.bank)}" class="bank-summary-logo">`
+          : '<div class="bank-summary-logo-fallback">Sem logo</div>';
+        document.getElementById('new-factor-installments').value = '';
+        document.getElementById('new-factor-value').value = '';
+        renderModalFactors();
+        document.getElementById('bank-modal-overlay').classList.remove('hidden');
+      }
+
+      function closeBankModal() {
+        activeBankIndex = null;
+        document.getElementById('bank-modal-overlay').classList.add('hidden');
+      }
+
+      function renderModalFactors() {
+        const container = document.getElementById('bank-modal-list');
+        if (activeBankIndex === null) return;
+
+        const group = bankState[activeBankIndex];
+        const factors = sortFactors(group.factors);
+        group.factors = factors;
+        document.getElementById('bank-modal-subtitle').textContent = `${group.product === 'tj' ? 'Tabela TJ' : 'Tabela normal'} - ${factors.length} fatores cadastrados`;
+
+        if (!factors.length) {
+          container.innerHTML = '<div class="empty-factor-state">Nenhum fator cadastrado para este banco.</div>';
+          return;
+        }
+
+        container.innerHTML = factors.map((item, factorIndex) => `
+          <div class="modal-factor-item">
+            <div class="modal-factor-term">${Number(item.installments || 0)}x</div>
+            <div class="modal-factor-body">
+              <span>Fator</span>
+              <input class="modal-factor-input" data-factor-index="${factorIndex}" type="number" min="0" step="0.000001" value="${item.factor}">
+            </div>
+            <button class="action-btn action-muted modal-delete-btn" data-delete-index="${factorIndex}" type="button">Excluir</button>
+          </div>
+        `).join('');
+
+        container.querySelectorAll('.modal-factor-input').forEach((input) => {
+          input.addEventListener('input', () => {
+            const factorIndex = Number(input.dataset.factorIndex);
+            group.factors[factorIndex].factor = Number(input.value || 0);
+            renderBankSummary();
+          });
+        });
+
+        container.querySelectorAll('.modal-delete-btn').forEach((button) => {
+          button.addEventListener('click', () => {
+            const factorIndex = Number(button.dataset.deleteIndex);
+            group.factors.splice(factorIndex, 1);
+            renderModalFactors();
+            renderBankSummary();
+          });
+        });
+      }
+
+      function addFactorToActiveBank() {
+        if (activeBankIndex === null) return;
+        const installments = Number(document.getElementById('new-factor-installments').value || 0);
+        const factor = Number(document.getElementById('new-factor-value').value || 0);
+        if (installments <= 0 || factor <= 0) return;
+
+        bankState[activeBankIndex].factors.push({ installments, factor });
+        document.getElementById('new-factor-installments').value = '';
+        document.getElementById('new-factor-value').value = '';
+        renderModalFactors();
+        renderBankSummary();
+      }
+
+      function saveBankFactors() {
+        const payload = bankState.map((group) => ({
+          bank: group.bank,
+          product: group.product,
+          factors: group.factors
+            .filter((item) => Number(item.installments || 0) > 0 && Number(item.factor || 0) > 0)
+            .map((item) => ({
+              installments: Number(item.installments || 0),
+              factor: Number(item.factor || 0),
+            })),
+        }));
+
+        document.getElementById('bank-factors-payload').value = JSON.stringify(payload);
+        document.getElementById('bank-factors-form').submit();
+      }
+
+      document.getElementById('close-bank-modal').addEventListener('click', closeBankModal);
+      document.getElementById('bank-modal-overlay').addEventListener('click', (event) => {
+        if (event.target.id === 'bank-modal-overlay') closeBankModal();
+      });
+      document.getElementById('add-factor-to-modal').addEventListener('click', addFactorToActiveBank);
+      document.getElementById('save-bank-factors').addEventListener('click', saveBankFactors);
+      document.getElementById('add-discount-row').addEventListener('click', () => {
+        const body = document.getElementById('discount-table-body');
+        const row = document.createElement('tr');
+        row.className = 'editor-row discount-row';
+        row.innerHTML = `
+          <td><input name="discount_name" type="text" placeholder="Ex.: BB - Quitacao"></td>
+          <td><input name="discount_percent" type="number" step="0.01" placeholder="0.00"></td>
+          <td class="editor-actions-col"><button class="action-btn action-danger action-small remove-row-btn" type="button">Remover</button></td>
+        `;
+        body.appendChild(row);
+        bindDiscountRemoveButtons();
+      });
+
+      bindDiscountRemoveButtons();
+      renderBankSummary();
+    </script>
+  </body>
+</html>

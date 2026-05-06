@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Calculadora de viabilidade</title>
+    <link rel="stylesheet" href="{{ asset_url('styles.css') }}">
+  </head>
+  <body>
+    <div class="app-bg"></div>
+    <header class="app-navbar">
+      <div class="page-shell navbar-inner">
+        <div class="navbar-brand">
+          <span class="brand-dot"></span>
+          <h1>Calculadora de Viabilidade</h1>
+        </div>
+      </div>
+    </header>
+
+    <main class="page-shell">
+      <section class="panel top-panel">
+        <div class="panel-label">Cole a tabela aqui (copie do sistema e cole abaixo):</div>
+        <textarea id="source-table" class="source-textarea" placeholder="Consignataria  Situacao  ADE  Servico  Prestacoes  Pagas  Prestacao  Deferimento  Quitacao  Ultimo Desconto  Ultima Parcela"></textarea>
+        <div class="toolbar">
+          <button id="parse-table" class="action-btn action-primary" type="button">Processar Tabela</button>
+          <button id="clear-source" class="action-btn action-danger" type="button">Limpar</button>
+          <button id="load-sample" class="action-btn action-muted" type="button">Exemplo</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-title"><span class="dot"></span>Resumo da Operacao</div>
+        <div class="summary-strip">
+          <div class="metric-box">
+            <label>Soma Oferta</label>
+            <input id="sum-offer" type="text" readonly value="R$ 0,00">
+          </div>
+          <div class="metric-box">
+            <label>Bruto</label>
+            <div class="inline-input">
+              <span class="prefix-chip">R$</span>
+              <input id="gross-input" type="text" inputmode="decimal" placeholder="0,00">
+              <button class="mini-clear" data-clear-target="gross-input" type="button">x</button>
+            </div>
+          </div>
+          <div class="metric-box">
+            <label>TPS %</label>
+            <div class="inline-input">
+              <input id="tps-percent-input" type="text" inputmode="decimal" placeholder="0,00">
+              <span class="suffix-chip">%</span>
+              <button class="mini-clear" data-clear-target="tps-percent-input" type="button">x</button>
+            </div>
+          </div>
+          <div class="metric-box">
+            <label>TPS R$</label>
+            <input id="tps-value" type="text" readonly value="R$ 0,00">
+          </div>
+          <div class="metric-box">
+            <label>Liquido</label>
+            <input id="net-value" type="text" readonly value="R$ 0,00">
+          </div>
+          <div class="metric-box saldo-box">
+            <label>Saldo</label>
+            <input id="consultant-balance" type="text" readonly value="R$ 0,00">
+          </div>
+        </div>
+      </section>
+
+      <section class="panel result-panel">
+        <div class="section-title"><span class="dot"></span><span id="result-title">Resultado - 0 registros processados</span></div>
+        <div class="table-wrap">
+          <table class="calc-table">
+            <thead>
+              <tr>
+                <th>Consignataria</th>
+                <th>Situacao</th>
+                <th>ADE</th>
+                <th class="service-col">Servico</th>
+                <th>Prestacoes</th>
+                <th>Pagas</th>
+                <th>Prestacao</th>
+                <th>Deferimento</th>
+                <th class="calc-head">Restantes</th>
+                <th class="calc-head">Saldo Devedor</th>
+                <th class="calc-head">Descricao</th>
+                <th class="calc-head">Quitar (avulso)</th>
+                <th class="calc-head">Desconto</th>
+                <th class="calc-head">%</th>
+                <th class="calc-head">Valor c/ Desconto</th>
+              </tr>
+            </thead>
+            <tbody id="calc-table-body">
+              <tr>
+                <td colspan="15" class="empty-state">Nenhuma linha processada.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="banks-panel">
+          <div class="banks-title">Bancos - Soma de Parcelas</div>
+          <div class="banks-table-wrap">
+            <table class="banks-table">
+              <thead>
+                <tr>
+                  <th>Banco</th>
+                  <th>Soma de Parcelas</th>
+                </tr>
+              </thead>
+              <tbody id="banks-table-body">
+                <tr>
+                  <td colspan="2" class="empty-state small">Sem dados.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-title"><span class="dot"></span>Simulador por Banco</div>
+        <div class="factor-toolbar">
+          <button class="mode-chip active" data-factor-product="normal" type="button">Normal</button>
+          <button class="mode-chip" data-factor-product="tj" type="button">TJ</button>
+        </div>
+        <div class="factor-toolbar">
+          <button class="mode-chip active" data-factor-mode="margin" type="button">Margem do cliente</button>
+          <button class="mode-chip" data-factor-mode="target" type="button">Valor desejado</button>
+        </div>
+
+        <div class="factor-input-grid">
+          <div class="metric-box">
+            <label id="factor-input-label">Margem disponivel do cliente</label>
+            <div class="inline-input">
+              <span class="prefix-chip">R$</span>
+              <input id="factor-base-input" type="text" inputmode="decimal" placeholder="0,00">
+              <button id="clear-factor-base" class="mini-clear" type="button">x</button>
+            </div>
+          </div>
+          <div class="metric-box">
+            <label id="factor-output-label">Resultado da simulacao</label>
+            <input id="factor-summary-output" type="text" readonly value="Informe um valor para simular">
+          </div>
+        </div>
+
+        <div id="bank-factor-grid" class="bank-factor-grid">
+          <div class="empty-factor-state">Nenhuma faixa cadastrada.</div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      window.APP_SAMPLE_TEXT = `BANCO - DIGIO [1684] Deferida 8810971 EMPRESTIMO - 1 - 5017 120 3 267,04 22/12/2025 01/03/2026 01/12/2035
+BANCO - SAFRA [390] Deferida 6816218 EMPRESTIMO - 1 - 5017 96 45 785,87 03/06/2022 01/03/2026 01/06/2030
+SINDICATO - SINDIMED [082] Deferida 719359 MENSALIDADE - 1 - ROTINA VALOR - 5022 127 110,00 23/03/2015 01/03/2026 01/12/2019`;
+    </script>
+    <script src="{{ asset_url('app.js') }}"></script>
+  </body>
+</html>

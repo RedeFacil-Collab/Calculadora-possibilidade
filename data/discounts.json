@@ -1,0 +1,126 @@
+[
+  {
+    "name": "BanriSul - Decrescente",
+    "percent": 18.0
+  },
+  {
+    "name": "BanriSul - Quitação",
+    "percent": 20.0
+  },
+  {
+    "name": "BB - Crescente",
+    "percent": 4.0
+  },
+  {
+    "name": "BB - Decrescente",
+    "percent": 10.0
+  },
+  {
+    "name": "BB - Quitação",
+    "percent": 12.0
+  },
+  {
+    "name": "BMG - Decrescente",
+    "percent": 12.0
+  },
+  {
+    "name": "BMG - Quitação",
+    "percent": 20.0
+  },
+  {
+    "name": "Bradesco - Decrescente",
+    "percent": 10.0
+  },
+  {
+    "name": "Bradesco - Quitação",
+    "percent": 12.0
+  },
+  {
+    "name": "CEF - Decrescente",
+    "percent": 10.0
+  },
+  {
+    "name": "CEF - Quitação",
+    "percent": 12.0
+  },
+  {
+    "name": "Daycoval - Decrescente",
+    "percent": 15.0
+  },
+  {
+    "name": "Daycoval - Quitação",
+    "percent": 20.0
+  },
+  {
+    "name": "Digio - Crescente",
+    "percent": 3.0
+  },
+  {
+    "name": "Digio - Decrescente",
+    "percent": 6.0
+  },
+  {
+    "name": "Digio - Quitação",
+    "percent": 15.0
+  },
+  {
+    "name": "Inter - Decrescente",
+    "percent": 8.0
+  },
+  {
+    "name": "Inter - Quitação",
+    "percent": 12.0
+  },
+  {
+    "name": "PAN - Crescente",
+    "percent": 5.0
+  },
+  {
+    "name": "PAN - Decrescente",
+    "percent": 12.0
+  },
+  {
+    "name": "PAN - Quitação",
+    "percent": 18.0
+  },
+  {
+    "name": "Safra - Crescente",
+    "percent": 5.0
+  },
+  {
+    "name": "Safra - Decrescente",
+    "percent": 15.0
+  },
+  {
+    "name": "Safra - Quitação",
+    "percent": 20.0
+  },
+  {
+    "name": "Santander - Crescente",
+    "percent": 3.0
+  },
+  {
+    "name": "Santander - Decrescente",
+    "percent": 8.0
+  },
+  {
+    "name": "Santander - Quitação",
+    "percent": 15.0
+  },
+  {
+    "name": "Sicoob - Decrescente",
+    "percent": 18.0
+  },
+  {
+    "name": "Sicoob - Quitação",
+    "percent": 25.0
+  },
+  {
+    "name": "Associação - Quitação",
+    "percent": 12.0
+  },
+  {
+    "name": "Banco Master - Quitação",
+    "percent": 50.0
+  }
+]

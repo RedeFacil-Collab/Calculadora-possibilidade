@@ -1,0 +1,12 @@
+services:
+  calculadora:
+    build: .
+    container_name: calculadora-viabilidade
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - FLASK_ENV=production
+    volumes:
+      - ./data:/app/data
+      - ./static/bank-logos:/app/static/bank-logos
