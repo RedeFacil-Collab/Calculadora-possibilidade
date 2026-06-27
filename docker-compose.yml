@@ -1,12 +1,57 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: calculadora-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-calculadora}
+      POSTGRES_USER: ${POSTGRES_USER:-calculadora}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina_POSTGRES_PASSWORD_no_arquivo_env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-calculadora} -d ${POSTGRES_DB:-calculadora}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: calculadora-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--notify-keyspace-events", "Ex"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   calculadora:
     build: .
     container_name: calculadora-viabilidade
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
-      - "8000:8000"
+      - "0.0.0.0:6321:8000"
     environment:
-      - FLASK_ENV=production
+      - FLASK_DEBUG=0
+      - APP_SECRET_KEY=${APP_SECRET_KEY:?Defina_APP_SECRET_KEY_no_arquivo_env}
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-false}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-calculadora}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-calculadora}
+      - REDIS_URL=redis://redis:6379/0
+      - GOOGLE_SHEET_ID=${GOOGLE_SHEET_ID:?Defina_GOOGLE_SHEET_ID_no_arquivo_env}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/google-service-account.json
     volumes:
       - ./data:/app/data
       - ./static/bank-logos:/app/static/bank-logos
+      - ./${GOOGLE_CREDENTIALS_FILE:?Defina_GOOGLE_CREDENTIALS_FILE_no_arquivo_env}:/app/secrets/google-service-account.json:ro
+
+volumes:
+  postgres_data:
+  redis_data:

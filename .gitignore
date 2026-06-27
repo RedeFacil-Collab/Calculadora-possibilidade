@@ -1,0 +1,9 @@
+client/node_modules/
+static/react/
+data/
+__pycache__/
+*.pyc
+.env
+*.json
+!package.json
+!package-lock.json

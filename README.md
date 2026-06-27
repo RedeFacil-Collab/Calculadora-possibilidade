@@ -1,39 +1,61 @@
-# Calculadora de viabilidade
+# Calculadora de Possibilidade
 
-Aplicação Flask para colar a tabela original de consignações, calcular saldo devedor, quitação avulsa, desconto e resumo da operação, sem login.
+Aplicação Flask com tela de login em React. O acesso é controlado por sessão,
+perfis e auditoria persistidos em PostgreSQL.
 
-## Como rodar
+## Perfis
 
-```bash
-py -3 -m pip install -r requirements.txt
-py -3 app.py
-```
+- `operador`: usa a calculadora e suas APIs de leitura.
+- `admin`: possui também acesso ao editor de descontos e fatores bancários.
 
-## Deploy com Docker (VPS)
+## Como rodar com Docker
 
-### Requisitos
-
-- Docker
-- Docker Compose
-
-### Subir o serviço
+Crie o arquivo `.env` a partir de `.env.example`, troque as chaves e senhas de
+exemplo e execute:
 
 ```bash
 docker compose up -d --build
+docker compose exec calculadora python auth.py --email admin@empresa.com --role admin
 ```
 
-A aplicação ficará disponível em:
+O segundo comando solicita uma senha de no mínimo 12 caracteres e cria o
+administrador dentro do PostgreSQL.
 
-- http://IP_DA_VPS:8000
+Acesse `http://localhost:8000/login`, entre com o usuário criado e o sistema
+redirecionará administradores para `http://localhost:8000/admin`.
 
-### Persistência de dados
+No painel, abra **Usuários** para criar contas com perfil `operador` ou `admin`,
+redefinir senhas e ativar/desativar acessos. Para conferir a visão de um
+operador sem encerrar a sessão administrativa, abra `/login` em uma janela
+anônima e entre com a conta criada.
 
-O `docker-compose.yml` monta volumes para manter os dados entre atualizações do container:
+Usuários e logs ficam no volume Docker `postgres_data`. Reiniciar ou recriar os
+containers não apaga esses dados.
 
-- `./data` -> `/app/data` (descontos, fatores, catálogo e mapeamento de logos)
-- `./static/bank-logos` -> `/app/static/bank-logos` (uploads de logos)
+O Redis mantém a presença online com expiração automática e publica as mudanças
+para o painel por SSE. A interface não faz polling da atividade; cada navegador
+autenticado envia somente um heartbeat de presença a cada 60 segundos.
+
+## Comandos úteis
+
+```bash
+docker compose ps
+docker compose logs -f calculadora
+docker compose logs -f postgres
+docker compose exec postgres psql -U calculadora -d calculadora
+```
+
+Mantenha o arquivo JSON da conta de serviço ao lado do `.env`. A variável
+`GOOGLE_CREDENTIALS_FILE` informa seu nome e ele é montado no container somente
+para leitura; não inclua essa credencial no Git.
+
+Em uma VPS, o serviço ficará disponível em `http://IP_DA_VPS:8000`.
+
+O React é compilado durante o build e seus arquivos estáticos são servidos pelo
+Flask. O Compose executa a aplicação e o PostgreSQL em containers separados.
 
 ### Notas de produção
 
-- A aplicação não possui login por padrão. Recomenda-se proteger o acesso ao editor em `/discounts-editor` (ex.: por VPN, IP allowlist ou autenticação no reverse proxy).
+- Em produção, use HTTPS e mantenha `SESSION_COOKIE_SECURE=true`.
+- A chave `APP_SECRET_KEY` é obrigatória no Docker e deve permanecer privada.
 - Para usar um domínio/HTTPS, coloque um reverse proxy (ex.: Nginx) na frente do container.

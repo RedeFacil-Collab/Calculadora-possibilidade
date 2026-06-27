@@ -8,13 +8,24 @@
   </head>
   <body>
     <div class="app-bg"></div>
-    <main class="page-shell editor-shell">
-      <section class="editor-hero">
-        <div>
+    <header class="app-navbar">
+      <div class="page-shell navbar-inner">
+        <div class="navbar-brand">
+          <span class="brand-dot"></span>
           <h1>Fatores por Banco</h1>
         </div>
-        <a class="action-btn action-muted" href="{{ url_for('index') }}">Voltar</a>
-      </section>
+        <div class="navbar-actions">
+          <div class="navbar-user">
+            <span>Conectado como</span>
+            <strong>{{ current_user.email }}</strong>
+          </div>
+          <a class="action-btn action-muted" href="{{ url_for('index') }}">Calculadora</a>
+          <a class="action-btn action-muted" href="{{ url_for('admin_dashboard') }}">Painel</a>
+          <button id="logout-button" class="action-btn action-logout" type="button">Sair</button>
+        </div>
+      </div>
+    </header>
+    <main class="page-shell editor-shell">
 
       {% if saved %}
         <div class="editor-alert editor-success">Arquivo salvo com sucesso.</div>
@@ -32,6 +43,7 @@
         </div>
 
         <form method="post" class="editor-form editor-section-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="form_type" value="discounts">
           <div class="editor-table-wrap">
             <table class="editor-table">
@@ -76,6 +88,7 @@
         </div>
 
         <form method="post" enctype="multipart/form-data" class="bank-add-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="form_type" value="add_bank">
           <div class="bank-add-grid">
             <label class="bank-field">
@@ -84,7 +97,7 @@
             </label>
             <label class="bank-field">
               <span>Imagem/Logo do banco</span>
-              <input name="bank_logo" type="file" accept=".png,.jpg,.jpeg,.webp,.svg">
+              <input name="bank_logo" type="file" accept=".png,.jpg,.jpeg,.webp">
             </label>
             <div class="bank-add-action">
               <button class="action-btn action-primary action-strong" type="submit">+ Adicionar banco</button>
@@ -116,6 +129,7 @@
       </section>
 
       <form id="bank-factors-form" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="form_type" value="bank_factors_payload">
         <input type="hidden" id="bank-factors-payload" name="bank_factors_payload" value="">
       </form>
@@ -132,6 +146,7 @@
         </div>
 
         <form method="post" enctype="multipart/form-data" class="bank-modal-logo-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="form_type" value="modal_bank_logo">
           <input type="hidden" id="modal-bank-name" name="modal_bank_name" value="">
           <input type="hidden" id="modal-bank-product" value="normal">
@@ -141,7 +156,7 @@
             </div>
             <label class="bank-field compact">
               <span>Imagem/Logo do banco</span>
-              <input name="modal_bank_logo" type="file" accept=".png,.jpg,.jpeg,.webp,.svg">
+              <input name="modal_bank_logo" type="file" accept=".png,.jpg,.jpeg,.webp">
             </label>
             <div class="bank-modal-add-action">
               <button class="action-btn action-muted" type="submit">Salvar logo</button>
@@ -379,6 +394,27 @@
 
       bindDiscountRemoveButtons();
       renderBankSummary();
+
+      const logoutButton = document.getElementById('logout-button');
+      if (logoutButton) {
+        logoutButton.addEventListener('click', async () => {
+          logoutButton.disabled = true;
+          logoutButton.textContent = 'Saindo...';
+          try {
+            const response = await fetch('/api/auth/logout', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'X-CSRF-Token': '{{ csrf_token() }}' },
+            });
+            if (!response.ok) throw new Error();
+            window.location.assign('/login');
+          } catch {
+            logoutButton.disabled = false;
+            logoutButton.textContent = 'Sair';
+            window.alert('Não foi possível sair. Tente novamente.');
+          }
+        });
+      }
     </script>
   </body>
 </html>

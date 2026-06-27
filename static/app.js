@@ -1,11 +1,14 @@
 const state = {
-  discounts: [],
   rows: [],
+  commercialMatrix: [],
+  commercialChoices: [],
+  blockedEntities: [],
   bankFactors: [],
   factorMode: 'margin',
   factorProduct: 'normal',
   factorCardsVisible: false,
   factorCardsSignature: '',
+  editingRowIndex: null,
 };
 
 const formatterCurrency = new Intl.NumberFormat('pt-BR', {
@@ -65,10 +68,6 @@ function normalizeText(value) {
     .toLowerCase();
 }
 
-function setTheme() {
-  document.documentElement.dataset.theme = 'dark';
-}
-
 function inferBankName(consignataria) {
   const value = normalizeText(consignataria);
   if (value.includes('bradesco')) return 'BANCO - BRADESCO';
@@ -92,9 +91,55 @@ function normalizeStatus(status) {
   return status === 'Deferida' ? 'Deferida' : status || '';
 }
 
-function discountRequiresAvulso(discountName) {
-  const value = normalizeText(discountName);
-  return value.includes('crescente') || value.includes('decrescente');
+function matrixBankKey(value) {
+  return normalizeText(value)
+    .replace(/\[[^\]]*\]/g, '')
+    .replace(/\b(banco|cooperativa)\b/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function matchCommercialBank(consignataria) {
+  const inferredKey = matrixBankKey(inferBankName(consignataria));
+  return state.commercialChoices.find((choice) => matrixBankKey(choice.banco) === inferredKey)?.banco || '';
+}
+
+function computeMaturity(paidCount, installmentCount) {
+  if (!installmentCount) return '';
+  const paidPercent = paidCount / installmentCount;
+  if (paidPercent <= 0.2) return 'Inicial';
+  if (paidPercent <= 0.5) return 'Intermediário';
+  if (paidPercent <= 0.8) return 'Maduro';
+  return 'Final';
+}
+
+function findCommercialReference(bankName, operation, maturity) {
+  const same = (value, expected) => normalizeText(value) === normalizeText(expected);
+  const bankKey = matrixBankKey(bankName);
+  const strategies = [
+    {
+      minimumCases: 1,
+      matches: (row) => matrixBankKey(row.banco) === bankKey && same(row.operacao, operation) && same(row.maturidade, maturity),
+    },
+    {
+      minimumCases: 1,
+      matches: (row) => matrixBankKey(row.banco) === bankKey && same(row.operacao, operation) && same(row.maturidade, 'Todas'),
+    },
+    {
+      minimumCases: 1,
+      matches: (row) => same(row.banco, 'Todos os Bancos') && same(row.operacao, operation),
+    },
+    {
+      minimumCases: 1,
+      matches: (row) => same(row.banco, 'Base Geral') && same(row.operacao, 'Todas as Operações'),
+    },
+  ];
+  for (const strategy of strategies) {
+    const result = state.commercialMatrix.find(
+      (row) => Number(row.casos || 0) >= strategy.minimumCases && strategy.matches(row),
+    );
+    if (result) return result;
+  }
+  return null;
 }
 
 function computeRow(row) {
@@ -105,12 +150,20 @@ function computeRow(row) {
   const installmentValue = Number(row.prestacao || 0);
   const debtBalance = remaining * installmentValue;
   const avulsoCount = Number(row.avulsoCount || 0);
-  const rawQuitBase = avulsoCount > 0 ? Math.min(avulsoCount, remaining) * installmentValue : debtBalance;
-  const discountPercent = Number(row.discountPercent || 0);
-  const requiresAvulso = discountRequiresAvulso(row.discountName);
-  const canApplyDiscount = row.discountName && (!requiresAvulso || avulsoCount > 0);
-  const quitBase = canApplyDiscount ? rawQuitBase : 0;
-  const discountedValue = canApplyDiscount ? quitBase * (1 - discountPercent / 100) : 0;
+  const operation = row.operation || '';
+  const commercialBank = row.commercialBank || '';
+  const maturity = hasInstallments ? computeMaturity(paidCount, installmentCount) : '';
+  const commercial = commercialBank && operation
+    ? findCommercialReference(commercialBank, operation, maturity)
+    : null;
+  const requiresAvulso = normalizeText(operation).includes('amortizacao');
+  const baseValue = requiresAvulso
+    ? (avulsoCount > 0 ? Math.min(avulsoCount, remaining) * installmentValue : 0)
+    : debtBalance;
+  const canApplyCommercialReference = Boolean(commercial && baseValue > 0 && (!requiresAvulso || avulsoCount > 0));
+  const commercialValue = canApplyCommercialReference
+    ? baseValue * (1 - Number(commercial.referencia_comercial || 0))
+    : 0;
 
   return {
     ...row,
@@ -118,9 +171,12 @@ function computeRow(row) {
     statusLabel: normalizeStatus(row.situacao),
     remaining,
     debtBalance,
-    quitBase,
-    discountedValue,
-    canApplyDiscount,
+    commercialBank,
+    operation,
+    maturity,
+    commercial,
+    commercialValue,
+    canApplyCommercialReference,
     description: hasInstallments ? `${paidCount} de ${installmentCount} pagas de ${formatCurrency(installmentValue)}` : '-',
     sumInstallments: installmentValue,
   };
@@ -129,8 +185,8 @@ function computeRow(row) {
 function updateSummary() {
   const calculatedRows = state.rows.map(computeRow);
   const totalOffer = calculatedRows
-    .filter((row) => row.discountName)
-    .reduce((sum, row) => sum + row.discountedValue, 0);
+    .filter((row) => row.canApplyCommercialReference)
+    .reduce((sum, row) => sum + row.commercialValue, 0);
 
   const gross = parseBrNumber(document.getElementById('gross-input').value);
   const tpsPercent = parseBrNumber(document.getElementById('tps-percent-input').value);
@@ -147,13 +203,13 @@ function updateSummary() {
   balanceInput.classList.toggle('positive', consultantBalance > 0);
 }
 
-function buildDiscountOptions(row) {
-  const blank = '<option value="">Selecione...</option>';
-  const options = state.discounts.map((item) => {
-    const selected = item.name === row.discountName ? 'selected' : '';
-    return `<option value="${escapeHtml(item.name)}" data-percent="${item.percent}" ${selected}>${escapeHtml(item.name)}</option>`;
+function buildCommercialOptions(row) {
+  const blank = '<option value="">Selecione banco e operação...</option>';
+  const options = state.commercialChoices.map((choice) => {
+    const value = `${choice.banco}::${choice.operacao}`;
+    const selected = choice.banco === row.commercialBank && choice.operacao === row.operation ? 'selected' : '';
+    return `<option value="${escapeHtml(value)}" ${selected}>${escapeHtml(choice.banco)} — ${escapeHtml(choice.operacao)}</option>`;
   });
-
   return blank + options.join('');
 }
 
@@ -346,8 +402,9 @@ function renderRows(focusOptions = {}) {
   const { focusIndex = null, caretPosition = null } = focusOptions;
   const tbody = document.getElementById('calc-table-body');
   if (!state.rows.length) {
-    tbody.innerHTML = '<tr><td colspan="15" class="empty-state">Nenhuma linha processada.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="17" class="empty-state">Nenhuma linha processada.</td></tr>';
     document.getElementById('result-title').textContent = 'Resultado - 0 registros processados';
+    document.getElementById('export-actions').style.display = 'none';
     renderBanksTable();
     updateSummary();
     return;
@@ -355,9 +412,10 @@ function renderRows(focusOptions = {}) {
 
   tbody.innerHTML = state.rows.map((row, index) => {
     const calculated = computeRow(row);
+    const isManual = Boolean(row._manual);
     return `
-      <tr>
-        <td class="col-consig">${escapeHtml(calculated.consignataria || '-')}</td>
+      <tr class="${isManual ? 'row-manual' : ''}">
+        <td class="col-consig">${escapeHtml(calculated.consignataria || '-')}${isManual ? '<span class="manual-badge">novo</span>' : ''}</td>
         <td><span class="status-pill">${escapeHtml(calculated.statusLabel)}</span></td>
         <td>${escapeHtml(calculated.ade || '-')}</td>
         <td class="service-col" title="${escapeHtml(calculated.servico || '')}">${escapeHtml(calculated.servico || '-')}</td>
@@ -375,17 +433,22 @@ function renderRows(focusOptions = {}) {
           </div>
         </td>
         <td>
-          <select class="discount-select" data-index="${index}">
-            ${buildDiscountOptions(row)}
+          <select class="commercial-select" data-index="${index}">
+            ${buildCommercialOptions(calculated)}
           </select>
         </td>
-        <td class="calc-value">${calculated.canApplyDiscount ? formatPercent(calculated.discountPercent) : '-'}</td>
-        <td class="highlight-value">${calculated.canApplyDiscount ? formatCurrency(calculated.discountedValue) : '-'}</td>
+        <td>${escapeHtml(calculated.maturity || '-')}</td>
+        <td class="calc-value">${calculated.commercial ? formatPercent(calculated.commercial.referencia_comercial * 100) : '-'}</td>
+        <td class="highlight-value">${calculated.canApplyCommercialReference ? formatCurrency(calculated.commercialValue) : '-'}</td>
+        <td class="row-actions-col">
+          <button class="action-btn action-muted action-small edit-row" data-index="${index}" type="button">Editar</button>
+        </td>
       </tr>
     `;
   }).join('');
 
   document.getElementById('result-title').textContent = `Resultado - ${state.rows.length} registros processados`;
+  document.getElementById('export-actions').style.display = state.rows.length ? '' : 'none';
   bindRowEvents();
   restoreAvulsoFocus(focusIndex, caretPosition);
   renderBanksTable();
@@ -393,12 +456,12 @@ function renderRows(focusOptions = {}) {
 }
 
 function bindRowEvents() {
-  document.querySelectorAll('.discount-select').forEach((select) => {
+  document.querySelectorAll('.commercial-select').forEach((select) => {
     select.addEventListener('change', (event) => {
       const index = Number(event.target.dataset.index);
-      const selectedOption = event.target.selectedOptions[0];
-      state.rows[index].discountName = event.target.value;
-      state.rows[index].discountPercent = Number(selectedOption?.dataset.percent || 0);
+      const [commercialBank = '', operation = ''] = event.target.value.split('::');
+      state.rows[index].commercialBank = commercialBank;
+      state.rows[index].operation = operation;
       renderRows();
     });
   });
@@ -420,16 +483,59 @@ function bindRowEvents() {
       renderRows();
     });
   });
+
+  document.querySelectorAll('.edit-row').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      openNewContractModal(Number(event.target.dataset.index));
+    });
+  });
 }
 
-async function loadDiscounts() {
+async function loadBlockedEntities() {
   try {
-    const response = await fetch('/api/discounts', { cache: 'no-store' });
+    const response = await fetch('/api/blocked-entities', { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    state.discounts = await response.json();
+    const payload = await response.json();
+    state.blockedEntities = (payload.blocked || []).map((entry) => normalizeText(entry));
   } catch (error) {
-    console.error('Falha ao carregar descontos:', error);
-    state.discounts = [];
+    console.error('Falha ao carregar entidades bloqueadas:', error);
+    state.blockedEntities = [];
+  }
+}
+
+function isEntityBlocked(banco, operacao) {
+  const bankKey = normalizeText(banco);
+  if (state.blockedEntities.includes(bankKey)) return true;
+  if (operacao) {
+    const opKey = normalizeText(`${banco}::${operacao}`);
+    if (state.blockedEntities.includes(opKey)) return true;
+  }
+  return false;
+}
+
+async function loadCommercialMatrix() {
+  try {
+    await loadBlockedEntities();
+    const response = await fetch('/api/commercial-matrix', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    state.commercialMatrix = (payload.rows || []).filter((row) => !isEntityBlocked(row.banco, row.operacao));
+    const choices = new Map();
+    state.commercialMatrix
+      .filter((row) => !['Base Geral', 'Todos os Bancos'].includes(row.banco))
+      .filter((row) => row.operacao && row.operacao !== 'Todas as Operações')
+      .forEach((row) => {
+        const key = `${row.banco}::${row.operacao}`;
+        choices.set(key, { banco: row.banco, operacao: row.operacao });
+      });
+    state.commercialChoices = [...choices.values()].sort((a, b) => {
+      const bankCompare = a.banco.localeCompare(b.banco, 'pt-BR');
+      return bankCompare || a.operacao.localeCompare(b.operacao, 'pt-BR');
+    });
+  } catch (error) {
+    console.error('Falha ao carregar matriz comercial:', error);
+    state.commercialMatrix = [];
+    state.commercialChoices = [];
   }
 }
 
@@ -452,19 +558,79 @@ async function parseSourceTable() {
     return;
   }
 
+  if (!state.commercialMatrix.length) {
+    await loadCommercialMatrix();
+  }
+
   const response = await fetch('/api/parse', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.APP_CSRF_TOKEN || '' },
     body: JSON.stringify({ text }),
   });
   const payload = await response.json();
-  state.rows = (payload.rows || []).map((row) => ({
-    ...row,
-    discountName: '',
-    discountPercent: 0,
-    avulsoCount: '',
-  }));
+  state.rows = (payload.rows || []).map((row) => {
+    const commercialBank = matchCommercialBank(row.consignataria);
+    const defaultChoice = state.commercialChoices.find(
+      (choice) => choice.banco === commercialBank && normalizeText(choice.operacao) === 'quitacao'
+    );
+    return {
+      ...row,
+      commercialBank,
+      operation: defaultChoice?.operacao || '',
+      avulsoCount: '',
+    };
+  });
   renderRows();
+}
+
+function collectExportRows() {
+  return state.rows.map((row) => {
+    const calculated = computeRow(row);
+    return {
+      consignataria: calculated.consignataria || '',
+      situacao: calculated.statusLabel || '',
+      ade: calculated.ade || '',
+      servico: calculated.servico || '',
+      prestacoes: calculated.prestacoes,
+      pagas: calculated.pagas,
+      prestacao: calculated.prestacao,
+      deferimento: calculated.deferimento || '',
+      remaining: calculated.remaining,
+      debtBalance: calculated.debtBalance,
+      maturity: calculated.maturity || '',
+      commercialLabel: calculated.commercialBank && calculated.operation
+        ? `${calculated.commercialBank} — ${calculated.operation}` : '',
+      reference: calculated.commercial ? (calculated.commercial.referencia_comercial * 100).toFixed(2) + '%' : '',
+      forecastValue: calculated.canApplyCommercialReference ? calculated.commercialValue : null,
+    };
+  });
+}
+
+async function exportExcel() {
+  const rows = collectExportRows();
+  if (!rows.length) return;
+  try {
+    const response = await fetch('/api/export/excel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.APP_CSRF_TOKEN || '' },
+      body: JSON.stringify({ rows }),
+    });
+    if (!response.ok) throw new Error('Falha ao exportar');
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'calculadora-resultado.xlsx';
+    link.click();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error('Erro ao exportar Excel:', error);
+    window.alert('Não foi possível exportar. Tente novamente.');
+  }
+}
+
+function exportPrint() {
+  window.print();
 }
 
 function bindTopActions() {
@@ -489,6 +655,12 @@ function bindTopActions() {
       sourceInput.value = window.APP_SAMPLE_TEXT;
     });
   }
+
+  const excelButton = document.getElementById('export-excel');
+  if (excelButton) excelButton.addEventListener('click', exportExcel);
+
+  const printButton = document.getElementById('export-print');
+  if (printButton) printButton.addEventListener('click', exportPrint);
 }
 
 function bindSummaryInputs() {
@@ -563,14 +735,251 @@ function bindFactorSimulation() {
   });
 }
 
+function bindLogout() {
+  const logoutButton = document.getElementById('logout-button');
+  if (!logoutButton) return;
+
+  logoutButton.addEventListener('click', async () => {
+    logoutButton.disabled = true;
+    logoutButton.textContent = 'Saindo...';
+    try {
+      const response = await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'X-CSRF-Token': window.APP_CSRF_TOKEN || '' },
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      window.location.assign('/login');
+    } catch (error) {
+      console.error('Falha ao encerrar a sessão:', error);
+      logoutButton.disabled = false;
+      logoutButton.textContent = 'Sair';
+      window.alert('Não foi possível sair. Tente novamente.');
+    }
+  });
+}
+
+function bindPresenceHeartbeat() {
+  const sendHeartbeat = () => {
+    fetch('/api/auth/heartbeat', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'X-CSRF-Token': window.APP_CSRF_TOKEN || '' },
+    }).catch(() => {});
+  };
+  sendHeartbeat();
+  window.setInterval(sendHeartbeat, 60000);
+}
+
+function parseDateBrToIso(value) {
+  const match = String(value || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return '';
+  return `${match[3]}-${match[2]}-${match[1]}`;
+}
+
+function setNewContractFormMode(rowIndex = null) {
+  const isEditing = rowIndex !== null && rowIndex !== undefined;
+  state.editingRowIndex = isEditing ? rowIndex : null;
+  const modalTitle = document.querySelector('#new-contract-overlay .nc-header h3');
+  const modalSubtitle = document.querySelector('#new-contract-overlay .nc-header p');
+  const addButton = document.getElementById('nc-add');
+  const addAnotherButton = document.getElementById('nc-add-another');
+  if (modalTitle) modalTitle.textContent = isEditing ? 'Editar Contrato' : 'Novo Contrato';
+  if (modalSubtitle) {
+    modalSubtitle.textContent = isEditing
+      ? 'Corrija os dados da operacao lancada'
+      : 'Preencha os dados da operacao que esta sendo ofertada';
+  }
+  if (addButton) addButton.textContent = isEditing ? 'Salvar alteracoes' : 'Adicionar a tabela';
+  if (addAnotherButton) addAnotherButton.style.display = isEditing ? 'none' : '';
+}
+
+function fillNewContractForm(row) {
+  document.getElementById('nc-consignataria').value = row.consignataria || '';
+  document.getElementById('nc-servico').value = row.servico || '';
+  document.getElementById('nc-prestacoes').value = row.prestacoes ?? '';
+  document.getElementById('nc-pagas').value = row.pagas ?? '0';
+  document.getElementById('nc-prestacao').value = row.prestacao ? formatCurrencyInput(String(Math.round(Number(row.prestacao) * 100))) : '';
+  document.getElementById('nc-deferimento').value = parseDateBrToIso(row.deferimento);
+}
+
+function openNewContractModal(rowIndex = null) {
+  const overlay = document.getElementById('new-contract-overlay');
+  setNewContractFormMode(rowIndex);
+  const row = state.editingRowIndex !== null ? state.rows[state.editingRowIndex] : null;
+  if (row) {
+    fillNewContractForm(row);
+  } else {
+    resetNewContractForm();
+  }
+  overlay.classList.remove('hidden');
+  const msg = overlay.querySelector('.nc-success-msg');
+  if (msg) msg.remove();
+  document.getElementById('nc-consignataria').focus();
+}
+
+function closeNewContractModal() {
+  state.editingRowIndex = null;
+  document.getElementById('new-contract-overlay').classList.add('hidden');
+}
+
+function resetNewContractForm() {
+  document.getElementById('nc-consignataria').value = '';
+  document.getElementById('nc-servico').value = '';
+  document.getElementById('nc-prestacoes').value = '';
+  document.getElementById('nc-pagas').value = '0';
+  document.getElementById('nc-prestacao').value = '';
+  document.getElementById('nc-deferimento').value = '';
+}
+
+function formatDateBr(isoDate) {
+  if (!isoDate) return '';
+  const [y, m, d] = isoDate.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+function buildNewContractRow() {
+  const consignataria = document.getElementById('nc-consignataria').value.trim();
+  const servico = document.getElementById('nc-servico').value.trim();
+  const prestacoesInput = document.getElementById('nc-prestacoes');
+  const pagasInput = document.getElementById('nc-pagas');
+  prestacoesInput.value = String(prestacoesInput.value || '').replace(/\D/g, '');
+  pagasInput.value = String(pagasInput.value || '').replace(/\D/g, '');
+  const prestacoes = parseInt(prestacoesInput.value, 10);
+  const pagas = parseInt(pagasInput.value || '0', 10);
+  const prestacao = parseBrNumber(document.getElementById('nc-prestacao').value);
+  const deferimento = formatDateBr(document.getElementById('nc-deferimento').value);
+
+  if (!consignataria) {
+    window.alert('Informe a consignatária.');
+    return null;
+  }
+  if (!prestacoes || prestacoes <= 0) {
+    window.alert('Informe o número de prestações.');
+    return null;
+  }
+  if (!prestacao || prestacao <= 0) {
+    window.alert('Informe o valor da prestação.');
+    return null;
+  }
+
+  const commercialBank = matchCommercialBank(consignataria);
+  const defaultChoice = state.commercialChoices.find(
+    (choice) => choice.banco === commercialBank && normalizeText(choice.operacao) === 'quitacao'
+  );
+
+  const existingRow = state.editingRowIndex !== null ? state.rows[state.editingRowIndex] : {};
+  const operation = existingRow.commercialBank === commercialBank
+    ? existingRow.operation
+    : defaultChoice?.operacao || '';
+
+  return {
+    ...existingRow,
+    consignataria,
+    situacao: existingRow.situacao || 'Deferida',
+    ade: existingRow.ade || '-',
+    servico: servico || 'NOVO CONTRATO',
+    prestacoes,
+    pagas: pagas || 0,
+    prestacao,
+    deferimento: deferimento || '-',
+    ultimo_desconto: existingRow.ultimo_desconto || '-',
+    ultima_parcela: existingRow.ultima_parcela || '-',
+    commercialBank,
+    operation,
+    avulsoCount: existingRow.avulsoCount || '',
+    _manual: existingRow._manual ?? true,
+  };
+}
+
+function addNewContract(keepOpen) {
+  const row = buildNewContractRow();
+  if (!row) return;
+
+  if (state.editingRowIndex !== null) {
+    state.rows[state.editingRowIndex] = row;
+    state.editingRowIndex = null;
+    resetNewContractForm();
+    closeNewContractModal();
+    renderRows();
+    return;
+  }
+
+  if (!state.commercialMatrix.length) {
+    loadCommercialMatrix().then(() => {
+      row.commercialBank = matchCommercialBank(row.consignataria);
+      const defaultChoice = state.commercialChoices.find(
+        (choice) => choice.banco === row.commercialBank && normalizeText(choice.operacao) === 'quitacao'
+      );
+      row.operation = defaultChoice?.operacao || '';
+      state.rows.push(row);
+      renderRows();
+    });
+  } else {
+    state.rows.push(row);
+    renderRows();
+  }
+
+  if (keepOpen) {
+    resetNewContractForm();
+    const body = document.querySelector('.nc-body');
+    const existing = body.querySelector('.nc-success-msg');
+    if (existing) existing.remove();
+    const msg = document.createElement('div');
+    msg.className = 'nc-success-msg';
+    msg.textContent = `Contrato "${row.consignataria}" adicionado com sucesso!`;
+    body.insertBefore(msg, body.firstChild);
+    document.getElementById('nc-consignataria').focus();
+  } else {
+    resetNewContractForm();
+    closeNewContractModal();
+  }
+}
+
+function bindNewContract() {
+  const openBtn = document.getElementById('open-new-contract');
+  if (openBtn) openBtn.addEventListener('click', () => openNewContractModal());
+
+  const closeBtn = document.getElementById('nc-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeNewContractModal);
+
+  const overlay = document.getElementById('new-contract-overlay');
+  if (overlay) {
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeNewContractModal();
+    });
+  }
+
+  const addBtn = document.getElementById('nc-add');
+  if (addBtn) addBtn.addEventListener('click', () => addNewContract(false));
+
+  const addAnotherBtn = document.getElementById('nc-add-another');
+  if (addAnotherBtn) addAnotherBtn.addEventListener('click', () => addNewContract(true));
+
+  const prestacaoInput = document.getElementById('nc-prestacao');
+  if (prestacaoInput) {
+    prestacaoInput.addEventListener('input', (e) => {
+      e.target.value = formatCurrencyInput(e.target.value);
+    });
+  }
+
+  ['nc-prestacoes', 'nc-pagas'].forEach((inputId) => {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    input.addEventListener('input', (e) => {
+      e.target.value = String(e.target.value || '').replace(/\D/g, '');
+    });
+  });
+}
+
 async function init() {
   bindTopActions();
   bindSummaryInputs();
   bindFactorSimulation();
-  setTheme();
-  renderFactorCards();
-  renderRows();
-  await Promise.all([loadDiscounts(), loadBankFactors()]);
+  bindNewContract();
+  bindLogout();
+  bindPresenceHeartbeat();
+  await Promise.all([loadCommercialMatrix(), loadBankFactors()]);
   renderFactorCards();
   renderRows();
 }

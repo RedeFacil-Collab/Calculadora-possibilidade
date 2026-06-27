@@ -14,6 +14,16 @@
           <span class="brand-dot"></span>
           <h1>Calculadora de Viabilidade</h1>
         </div>
+        <div class="navbar-actions">
+          <div class="navbar-user">
+            <span>Conectado como</span>
+            <strong>{{ current_user.email }}</strong>
+          </div>
+          {% if current_user.role == "admin" %}
+            <a class="action-btn action-muted" href="{{ url_for('admin_dashboard') }}">Painel administrativo</a>
+          {% endif %}
+          <button id="logout-button" class="action-btn action-logout" type="button">Sair</button>
+        </div>
       </div>
     </header>
 
@@ -25,6 +35,7 @@
           <button id="parse-table" class="action-btn action-primary" type="button">Processar Tabela</button>
           <button id="clear-source" class="action-btn action-danger" type="button">Limpar</button>
           <button id="load-sample" class="action-btn action-muted" type="button">Exemplo</button>
+          <button id="open-new-contract" class="action-btn action-new-contract" type="button">+ Novo Contrato</button>
         </div>
       </section>
 
@@ -32,7 +43,7 @@
         <div class="section-title"><span class="dot"></span>Resumo da Operacao</div>
         <div class="summary-strip">
           <div class="metric-box">
-            <label>Soma Oferta</label>
+            <label>Soma previsão</label>
             <input id="sum-offer" type="text" readonly value="R$ 0,00">
           </div>
           <div class="metric-box">
@@ -67,7 +78,26 @@
       </section>
 
       <section class="panel result-panel">
-        <div class="section-title"><span class="dot"></span><span id="result-title">Resultado - 0 registros processados</span></div>
+        <div class="section-title">
+          <span class="dot"></span>
+          <span id="result-title">Resultado - 0 registros processados</span>
+          <div class="export-actions" id="export-actions" style="display:none;margin-left:auto;">
+            <button id="export-excel" class="action-btn action-muted action-small" type="button">Exportar Excel</button>
+            <button id="export-print" class="action-btn action-muted action-small" type="button">Imprimir / PDF</button>
+          </div>
+        </div>
+        <aside class="maturity-legend" aria-label="Como a maturidade é calculada">
+          <div class="maturity-legend-heading">
+            <strong>Legenda de maturidade</strong>
+            <span>% pago = parcelas pagas ÷ prazo original</span>
+          </div>
+          <div class="maturity-legend-rules">
+            <span><b>Inicial</b> até 20%</span>
+            <span><b>Intermediário</b> até 50%</span>
+            <span><b>Maduro</b> até 80%</span>
+            <span><b>Final</b> acima de 80%</span>
+          </div>
+        </aside>
         <div class="table-wrap">
           <table class="calc-table">
             <thead>
@@ -83,15 +113,17 @@
                 <th class="calc-head">Restantes</th>
                 <th class="calc-head">Saldo Devedor</th>
                 <th class="calc-head">Descricao</th>
-                <th class="calc-head">Quitar (avulso)</th>
-                <th class="calc-head">Desconto</th>
-                <th class="calc-head">%</th>
-                <th class="calc-head">Valor c/ Desconto</th>
+                <th class="calc-head">Parcelas p/ amortizar</th>
+                <th class="calc-head">Banco — Operação</th>
+                <th class="calc-head">Maturidade</th>
+                <th class="calc-head">Referência</th>
+                <th class="calc-head">Valor previsão</th>
+                <th class="calc-head">Ações</th>
               </tr>
             </thead>
             <tbody id="calc-table-body">
               <tr>
-                <td colspan="15" class="empty-state">Nenhuma linha processada.</td>
+                <td colspan="17" class="empty-state">Nenhuma linha processada.</td>
               </tr>
             </tbody>
           </table>
@@ -149,7 +181,55 @@
       </section>
     </main>
 
+    <div id="new-contract-overlay" class="nc-overlay hidden">
+      <div class="nc-modal">
+        <div class="nc-header">
+          <div>
+            <h3>Novo Contrato</h3>
+            <p>Preencha os dados da operação que está sendo ofertada</p>
+          </div>
+          <button id="nc-close" class="action-btn action-muted action-small" type="button">Fechar</button>
+        </div>
+        <div class="nc-body">
+          <div class="nc-grid">
+            <div class="nc-field nc-field-wide">
+              <label>Consignatária</label>
+              <input id="nc-consignataria" type="text" placeholder="Ex: BANCO - SAFRA [390]">
+            </div>
+            <div class="nc-field">
+              <label>Serviço</label>
+              <input id="nc-servico" type="text" placeholder="Ex: EMPRESTIMO - 1 - 5017">
+            </div>
+            <div class="nc-field">
+              <label>Prestações (prazo)</label>
+              <input id="nc-prestacoes" type="number" inputmode="numeric" min="1" step="1" placeholder="Ex: 120">
+            </div>
+            <div class="nc-field">
+              <label>Pagas</label>
+              <input id="nc-pagas" type="number" inputmode="numeric" min="0" step="1" placeholder="0" value="0">
+            </div>
+            <div class="nc-field">
+              <label>Valor da Prestação</label>
+              <div class="inline-input">
+                <span class="prefix-chip">R$</span>
+                <input id="nc-prestacao" type="text" inputmode="decimal" placeholder="0,00">
+              </div>
+            </div>
+            <div class="nc-field">
+              <label>Deferimento</label>
+              <input id="nc-deferimento" type="date">
+            </div>
+          </div>
+          <div class="nc-actions">
+            <button id="nc-add" class="action-btn action-primary" type="button">Adicionar à tabela</button>
+            <button id="nc-add-another" class="action-btn action-muted" type="button">Adicionar e continuar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script>
+      window.APP_CSRF_TOKEN = "{{ csrf_token() }}";
       window.APP_SAMPLE_TEXT = `BANCO - DIGIO [1684] Deferida 8810971 EMPRESTIMO - 1 - 5017 120 3 267,04 22/12/2025 01/03/2026 01/12/2035
 BANCO - SAFRA [390] Deferida 6816218 EMPRESTIMO - 1 - 5017 96 45 785,87 03/06/2022 01/03/2026 01/06/2030
 SINDICATO - SINDIMED [082] Deferida 719359 MENSALIDADE - 1 - ROTINA VALOR - 5022 127 110,00 23/03/2015 01/03/2026 01/12/2019`;

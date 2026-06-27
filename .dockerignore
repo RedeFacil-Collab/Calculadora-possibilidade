@@ -9,3 +9,6 @@ venv/
 .git/
 .gitignore
 *.log
+client/node_modules/
+static/react/
+*service-account*.json
