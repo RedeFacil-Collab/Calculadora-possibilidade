@@ -243,6 +243,13 @@ a {
   border: 1px solid var(--line);
 }
 
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
 .summary-strip {
   display: grid;
   grid-template-columns: repeat(6, minmax(160px, 1fr));

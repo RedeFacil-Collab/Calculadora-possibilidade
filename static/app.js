@@ -441,7 +441,10 @@ function renderRows(focusOptions = {}) {
         <td class="calc-value">${calculated.commercial ? formatPercent(calculated.commercial.referencia_comercial * 100) : '-'}</td>
         <td class="highlight-value">${calculated.canApplyCommercialReference ? formatCurrency(calculated.commercialValue) : '-'}</td>
         <td class="row-actions-col">
-          <button class="action-btn action-muted action-small edit-row" data-index="${index}" type="button">Editar</button>
+          <div class="row-actions">
+            <button class="action-btn action-muted action-small edit-row" data-index="${index}" type="button">Editar</button>
+            <button class="action-btn action-danger action-small delete-row" data-index="${index}" type="button">Excluir</button>
+          </div>
         </td>
       </tr>
     `;
@@ -486,7 +489,21 @@ function bindRowEvents() {
 
   document.querySelectorAll('.edit-row').forEach((button) => {
     button.addEventListener('click', (event) => {
-      openNewContractModal(Number(event.target.dataset.index));
+      openNewContractModal(Number(event.currentTarget.dataset.index));
+    });
+  });
+
+  document.querySelectorAll('.delete-row').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      const index = Number(event.currentTarget.dataset.index);
+      const row = state.rows[index];
+      if (!row) return;
+
+      const identifier = row.ade && row.ade !== '-' ? `ADE ${row.ade}` : row.consignataria || 'selecionada';
+      if (!window.confirm(`Excluir a linha ${identifier}? Esta acao nao pode ser desfeita.`)) return;
+
+      state.rows.splice(index, 1);
+      renderRows();
     });
   });
 }
