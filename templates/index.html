@@ -19,8 +19,10 @@
             <span>Conectado como</span>
             <strong>{{ current_user.email }}</strong>
           </div>
-          {% if current_user.role == "admin" %}
-            <a class="action-btn action-muted" href="{{ url_for('admin_dashboard') }}">Painel administrativo</a>
+          {% if current_user.role in ("admin", "monitoria") %}
+            <a class="action-btn action-muted" href="{{ url_for('admin_dashboard') }}">Painel de acompanhamento</a>
+          {% elif current_user.role == "operacional" %}
+            <a class="action-btn action-muted" href="{{ url_for('discounts_editor') }}">Bancos e fatores</a>
           {% endif %}
           <button id="logout-button" class="action-btn action-logout" type="button">Sair</button>
         </div>

@@ -10,6 +10,7 @@ const EVENT_LABELS = {
   logout: 'Logout',
   user_created: 'Usuário criado',
   user_updated: 'Usuário atualizado',
+  user_deleted: 'Usuário excluído',
   password_reset: 'Senha redefinida',
   login_rate_limited: 'Login bloqueado (rate limit)',
   blocked_entities_updated: 'Restrições atualizadas',
@@ -20,6 +21,9 @@ const EVENT_LABELS = {
 };
 
 const TIMEZONE = 'America/Sao_Paulo';
+const RECENT_USERS_LIMIT = 6;
+const AUDIT_PAGE_SIZE = 10;
+const ACTIVITY_PAGE_SIZE = 10;
 const formatDate = (value) => value
   ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'medium', timeZone: TIMEZONE }).format(new Date(value))
   : '—';
@@ -47,6 +51,7 @@ function AdminApp() {
   const [session, setSession] = useState(null);
   const [summary, setSummary] = useState(null);
   const [audit, setAudit] = useState({ rows: [], page: 1, pages: 1, total: 0 });
+  const [overviewAudit, setOverviewAudit] = useState({ rows: [], page: 1, pages: 1, total: 0 });
   const [users, setUsers] = useState([]);
   const [activity, setActivity] = useState({ users: [], summary: {}, online_window_minutes: 5 });
   const [search, setSearch] = useState('');
@@ -60,10 +65,28 @@ function AdminApp() {
 
   const csrfHeaders = (extra = {}) => ({ 'X-CSRF-Token': csrfToken, ...extra });
 
+  const loadOverview = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const [auditResponse, summaryResponse] = await Promise.all([
+        fetch('/api/admin/audit?per_page=8', { credentials: 'same-origin' }),
+        fetch('/api/admin/summary', { credentials: 'same-origin' }),
+      ]);
+      if (!auditResponse.ok || !summaryResponse.ok) throw new Error('Não foi possível carregar a visão geral.');
+      setOverviewAudit(await auditResponse.json());
+      setSummary(await summaryResponse.json());
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const loadAudit = useCallback(async (page = 1) => {
     setLoading(true);
     setError('');
-    const params = new URLSearchParams({ page, per_page: 20 });
+    const params = new URLSearchParams({ page, per_page: AUDIT_PAGE_SIZE });
     if (search) params.set('search', search);
     if (event) params.set('event', event);
     try {
@@ -87,7 +110,7 @@ function AdminApp() {
         const [sessionResponse, usersResponse, auditResponse, summaryResponse, activityResponse] = await Promise.all([
           fetch('/api/auth/session'),
           fetch('/api/admin/users'),
-          fetch('/api/admin/audit?per_page=20'),
+          fetch(`/api/admin/audit?per_page=${AUDIT_PAGE_SIZE}`),
           fetch('/api/admin/summary'),
           fetch('/api/admin/activity'),
         ]);
@@ -105,6 +128,7 @@ function AdminApp() {
         setCsrfToken(sessionData.csrf_token || '');
         setUsers(usersData.users || []);
         setAudit(auditData);
+        setOverviewAudit(auditData);
         setSummary(summaryData);
         setActivity(activityData);
       } catch (requestError) {
@@ -141,21 +165,26 @@ function AdminApp() {
     window.location.assign('/login');
   }
 
+  const isAdmin = session?.role === 'admin';
+  const roleLabel = session?.role === 'monitoria' ? 'Monitoria' : session?.role === 'operacional' ? 'Operacional' : isAdmin ? 'Administrador' : 'Operador';
   const menu = [
     ['overview', 'Visão geral', 'overview'],
     ['activity', 'Atividade', 'activity'],
     ['audit', 'Auditoria', 'audit'],
-    ['users', 'Usuários', 'users'],
     ['reports', 'Relatórios', 'reports'],
-    ['restrictions', 'Restrições', 'restrictions'],
     ['calculator', 'Calculadora', 'calculator'],
-    ['settings', 'Configurações', 'settings'],
+    ...(isAdmin ? [
+      ['users', 'Usuários', 'users'],
+      ['restrictions', 'Restrições', 'restrictions'],
+      ['settings', 'Configurações', 'settings'],
+    ] : []),
   ];
 
   function navigate(view) {
     if (view === 'calculator') return window.location.assign('/');
     if (view === 'settings') return window.location.assign('/discounts-editor');
     setActiveView(view);
+    if (view === 'overview') loadOverview();
   }
 
   async function refreshUsers() {
@@ -193,8 +222,10 @@ function AdminApp() {
       setUserForm({ email: '', display_name: '', password: '', password_confirmation: '', role: 'operador' });
       setUserMessage('Usuário criado. Abra uma janela anônima para testar esse acesso.');
       await refreshUsers();
+      return true;
     } catch (requestError) {
       setError(requestError.message);
+      return false;
     } finally {
       setSavingUser(false);
     }
@@ -221,6 +252,14 @@ function AdminApp() {
     }
   }
 
+  const activeUsers = users.filter((user) => user.is_active);
+  const recentActiveUsers = [...activeUsers]
+    .sort((left, right) => {
+      const dateDifference = (Date.parse(right.created_at) || 0) - (Date.parse(left.created_at) || 0);
+      return dateDifference || Number(right.id) - Number(left.id);
+    })
+    .slice(0, RECENT_USERS_LIMIT);
+
   return (
     <div className="admin-shell">
       <aside className="sidebar">
@@ -238,7 +277,7 @@ function AdminApp() {
       <main className="admin-main">
         <header className="admin-header">
           <div><strong>Painel Administrativo</strong><span>Controle e rastreabilidade do sistema</span></div>
-          <div className="admin-account"><div><strong>{session?.email || 'Administrador'}</strong><span>Administrador</span></div><button onClick={logout}>Sair</button></div>
+          <div className="admin-account"><div><strong>{session?.email || 'Usuário'}</strong><span>{roleLabel}</span></div><button onClick={logout}>Sair</button></div>
         </header>
 
         <section className="admin-content">
@@ -247,7 +286,7 @@ function AdminApp() {
               <h1>{activeView === 'overview' ? 'Visão geral' : activeView === 'activity' ? 'Atividade e simulações' : activeView === 'users' ? 'Usuários' : activeView === 'restrictions' ? 'Restrições' : activeView === 'reports' ? 'Relatórios' : 'Auditoria do sistema'}</h1>
               <p>{activeView === 'activity' ? `Presença em tempo real e ranking de simulações. Online = atividade nos últimos ${activity.online_window_minutes} min.` : activeView === 'users' ? 'Crie acessos e controle os perfis autorizados.' : activeView === 'restrictions' ? 'Bloqueie bancos e associações que não devem aparecer na calculadora.' : activeView === 'reports' ? 'Acompanhe a produtividade dos consultores por período.' : 'Acompanhe acessos e operações realizadas pelos usuários.'}</p>
             </div>
-            {activeView === 'activity' ? <button className="refresh" onClick={refreshActivity}>Atualizar atividade</button> : activeView === 'users' ? <button className="refresh" onClick={refreshUsers}>Atualizar usuários</button> : <button className="refresh" onClick={() => loadAudit(audit.page)} disabled={loading}>Atualizar dados</button>}
+            {activeView === 'activity' ? <button className="refresh" onClick={refreshActivity}>Atualizar atividade</button> : activeView === 'users' ? <button className="refresh" onClick={refreshUsers}>Atualizar usuários</button> : activeView === 'overview' ? <button className="refresh" onClick={loadOverview} disabled={loading}>Atualizar dados</button> : activeView === 'audit' ? <button className="refresh" onClick={() => loadAudit(audit.page)} disabled={loading}>Atualizar dados</button> : null}
           </div>
 
           {!['users', 'activity', 'restrictions', 'reports'].includes(activeView) ? <div className="metrics">
@@ -274,13 +313,17 @@ function AdminApp() {
               users={users}
             />
           ) : activeView === 'reports' ? (
-            <ReportsView />
+            <ReportsView users={users} />
           ) : activeView === 'restrictions' ? (
             <RestrictionsView csrfToken={csrfToken} />
           ) : activeView === 'overview' ? (
             <div className="overview-grid">
-              <section className="surface"><div className="surface-title"><h2>Atividade recente</h2><button onClick={() => setActiveView('audit')}>Ver auditoria</button></div><AuditTable rows={audit.rows.slice(0, 8)} compact /></section>
-              <section className="surface users-summary"><div className="surface-title"><h2>Usuários ativos</h2><strong>{summary?.active_users ?? 0}</strong></div>{users.map((user) => <div className="user-line" key={user.id}><span>{user.email}</span><b>{user.role}</b></div>)}</section>
+              <section className="surface"><div className="surface-title"><h2>Atividade recente</h2><button onClick={() => setActiveView('audit')}>Ver auditoria</button></div><AuditTable rows={overviewAudit.rows.slice(0, 8)} compact /></section>
+              <section className="surface users-summary">
+                <div className="surface-title"><h2>Usuários recentes</h2><strong>{activeUsers.length} ativos</strong></div>
+                {recentActiveUsers.map((user) => <div className="user-line" key={user.id}><span>{user.email}</span><b>{user.role}</b></div>)}
+                {isAdmin ? <button className="users-summary-link" type="button" onClick={() => setActiveView('users')}>Ver todos os usuários</button> : null}
+              </section>
             </div>
           ) : (
             <section className="surface audit-surface">
@@ -303,7 +346,12 @@ function AdminApp() {
 }
 
 function ActivityView({ activity, error }) {
+  const [page, setPage] = useState(1);
   const summary = activity.summary || {};
+  const users = activity.users || [];
+  const pages = Math.max(1, Math.ceil(users.length / ACTIVITY_PAGE_SIZE));
+  const currentPage = Math.min(page, pages);
+  const visibleUsers = users.slice((currentPage - 1) * ACTIVITY_PAGE_SIZE, currentPage * ACTIVITY_PAGE_SIZE);
   return (
     <>
       <div className="metrics activity-metrics">
@@ -319,11 +367,11 @@ function ActivityView({ activity, error }) {
           <table className="audit-table activity-table">
             <thead><tr><th>Usuário</th><th>Consultor</th><th>Perfil</th><th>Presença</th><th>Última atividade</th><th>Simulações</th><th>Última simulação</th></tr></thead>
             <tbody>
-              {activity.users?.length ? activity.users.map((user) => (
+              {visibleUsers.length ? visibleUsers.map((user) => (
                 <tr key={user.id}>
                   <td>{user.email}</td>
                   <td>{user.display_name || '-'}</td>
-                  <td>{user.role === 'admin' ? 'Administrador' : 'Operador'}</td>
+                  <td>{user.role === 'admin' ? 'Administrador' : user.role === 'monitoria' ? 'Monitoria' : user.role === 'operacional' ? 'Operacional' : 'Operador'}</td>
                   <td><span className={`presence ${user.is_online ? 'online' : 'offline'}`}><i />{user.is_online ? 'Online' : 'Offline'}</span></td>
                   <td>{formatDate(user.last_seen_at)}</td>
                   <td><strong className="processed-count">{user.tables_processed}</strong></td>
@@ -333,6 +381,14 @@ function ActivityView({ activity, error }) {
             </tbody>
           </table>
         </div>
+        <footer className="pagination activity-pagination">
+          <span>{users.length ? `${(currentPage - 1) * ACTIVITY_PAGE_SIZE + 1}-${Math.min(currentPage * ACTIVITY_PAGE_SIZE, users.length)} de ${users.length} usuários` : '0 usuários'}</span>
+          <div>
+            <button type="button" disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>Anterior</button>
+            <span>Página {currentPage} de {pages}</span>
+            <button type="button" disabled={currentPage >= pages} onClick={() => setPage((value) => Math.min(pages, value + 1))}>Próxima</button>
+          </div>
+        </footer>
       </section>
     </>
   );
@@ -352,15 +408,26 @@ function PasswordField({ id, label, value, onChange, required = false }) {
 }
 
 function UsersView({ csrfToken, currentUserId, error, form, message, onCreate, onFormChange, onUpdate, saving, users, onRefresh }) {
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [createMode, setCreateMode] = useState('single');
   const [editingUserId, setEditingUserId] = useState(null);
   const [editForm, setEditForm] = useState(null);
   const [tempPassword, setTempPassword] = useState('');
-  const [bulkMode, setBulkMode] = useState(false);
   const [bulkText, setBulkText] = useState('');
   const [bulkResult, setBulkResult] = useState(null);
   const [bulkSaving, setBulkSaving] = useState(false);
   const [bulkError, setBulkError] = useState('');
+  const [userSearch, setUserSearch] = useState('');
+  const [userPage, setUserPage] = useState(1);
   const editingUser = users.find((user) => user.id === editingUserId);
+  const usersPerPage = 10;
+  const searchTerm = userSearch.trim().toLocaleLowerCase('pt-BR');
+  const filteredUsers = searchTerm
+    ? users.filter((user) => `${user.display_name || ''} ${user.email}`.toLocaleLowerCase('pt-BR').includes(searchTerm))
+    : users;
+  const userPages = Math.max(1, Math.ceil(filteredUsers.length / usersPerPage));
+  const currentUserPage = Math.min(userPage, userPages);
+  const visibleUsers = filteredUsers.slice((currentUserPage - 1) * usersPerPage, currentUserPage * usersPerPage);
 
   async function resetPassword(userId) {
     if (!window.confirm('Tem certeza que deseja redefinir a senha deste usuário?')) return;
@@ -373,6 +440,24 @@ function UsersView({ csrfToken, currentUserId, error, form, message, onCreate, o
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Não foi possível redefinir a senha.');
       setTempPassword(data.temporary_password);
+    } catch (requestError) {
+      window.alert(requestError.message);
+    }
+  }
+
+  async function deleteUser(user) {
+    if (!window.confirm(`Excluir permanentemente o acesso de ${user.email}? O histórico da auditoria será preservado.`)) return;
+    try {
+      const response = await fetch(`/api/admin/users/${user.id}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+        headers: { 'X-CSRF-Token': csrfToken },
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Não foi possível excluir o usuário.');
+      }
+      if (onRefresh) await onRefresh();
     } catch (requestError) {
       window.alert(requestError.message);
     }
@@ -446,6 +531,17 @@ function UsersView({ csrfToken, currentUserId, error, form, message, onCreate, o
     }
   }
 
+  async function submitNewUser(event) {
+    const created = await onCreate(event);
+    if (created) setCreateModalOpen(false);
+  }
+
+  function openCreateModal(mode = 'single') {
+    setCreateMode(mode);
+    setBulkError('');
+    setCreateModalOpen(true);
+  }
+
   function handleCsvFile(event) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -460,11 +556,20 @@ function UsersView({ csrfToken, currentUserId, error, form, message, onCreate, o
   }
 
   return (
-    <div className="users-layout">
-      <div className="users-sidebar">
-        <section className="surface">
-          <div className="surface-title"><h2>Novo usuário</h2></div>
-          <form className="user-form" onSubmit={onCreate}>
+    <div className="users-page">
+      {error && !createModalOpen ? <p className="admin-error">{error}</p> : null}
+      {message && !createModalOpen ? <p className="admin-success">{message}</p> : null}
+      {createModalOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="surface create-user-modal" role="dialog" aria-modal="true" aria-labelledby="create-user-title">
+            <div className="surface-title"><h2 id="create-user-title">Novo usuário</h2><button onClick={() => setCreateModalOpen(false)}>Fechar</button></div>
+            <div className="create-user-tabs" role="tablist" aria-label="Forma de cadastro">
+              <button type="button" role="tab" aria-selected={createMode === 'single'} className={createMode === 'single' ? 'active' : ''} onClick={() => setCreateMode('single')}>Cadastro individual</button>
+              <button type="button" role="tab" aria-selected={createMode === 'bulk'} className={createMode === 'bulk' ? 'active' : ''} onClick={() => setCreateMode('bulk')}>Importação em massa</button>
+            </div>
+            {createMode === 'single' ? (
+              <div className="create-user-modal-body">
+          <form className="user-form" onSubmit={submitNewUser}>
             <label htmlFor="user-name">Nome do consultor</label>
             <input id="user-name" type="text" autoComplete="off" value={form.display_name} onChange={(event) => onFormChange({ ...form, display_name: event.target.value })} placeholder="Nome completo" />
             <label htmlFor="user-email">E-mail</label>
@@ -475,24 +580,20 @@ function UsersView({ csrfToken, currentUserId, error, form, message, onCreate, o
             <label htmlFor="user-role">Perfil</label>
             <select id="user-role" value={form.role} onChange={(event) => onFormChange({ ...form, role: event.target.value })}>
               <option value="operador">Operador</option>
+              <option value="operacional">Operacional</option>
+              <option value="monitoria">Monitoria</option>
               <option value="admin">Administrador</option>
             </select>
             <button type="submit" disabled={saving}>{saving ? 'Criando…' : 'Criar usuário'}</button>
           </form>
           {error ? <p className="admin-error">{error}</p> : null}
           {message ? <p className="admin-success">{message}</p> : null}
-        </section>
-
-        <section className="surface">
-          <div className="surface-title">
-            <h2>Importação em massa</h2>
-            <button className="toggle-link" onClick={() => { setBulkMode(!bulkMode); setBulkResult(null); setBulkError(''); }}>{bulkMode ? 'Fechar' : 'Abrir'}</button>
-          </div>
-          {bulkMode ? (
+              </div>
+            ) : (
             <div className="bulk-body">
               <p className="bulk-help">Cole os dados ou envie um arquivo <strong>.csv</strong>. Separadores aceitos: <code>;</code> <code>,</code> <code>Tab</code>. Um usuário por linha.</p>
               <div className="bulk-format">
-                <strong>Formato:</strong> email ; nome do consultor ; perfil (operador/admin) ; senha (opcional)
+                <strong>Formato:</strong> email ; nome do consultor ; perfil (operador/operacional/monitoria/admin) ; senha (opcional)
               </div>
               <div className="bulk-input-tabs">
                 <label className="bulk-file-btn">
@@ -545,30 +646,50 @@ function UsersView({ csrfToken, currentUserId, error, form, message, onCreate, o
                 </div>
               ) : null}
             </div>
-          ) : null}
-        </section>
-      </div>
+            )}
+          </section>
+        </div>
+      ) : null}
       <section className="surface users-list">
-        <div className="surface-title"><h2>Contas cadastradas</h2><strong>{users.length}</strong></div>
+        <div className="surface-title"><h2>Contas cadastradas</h2><strong>{filteredUsers.length}</strong></div>
+        <div className="users-list-toolbar">
+          <input
+            type="search"
+            aria-label="Buscar usuários"
+            placeholder="Buscar por nome ou e-mail"
+            value={userSearch}
+            onChange={(event) => { setUserSearch(event.target.value); setUserPage(1); }}
+          />
+          <button type="button" onClick={() => openCreateModal('single')}>Novo usuário</button>
+        </div>
         <div className="audit-table-wrap">
           <table className="audit-table users-table">
             <thead><tr><th>Usuário</th><th>Perfil</th><th>Status</th><th>Última atividade</th><th>Ações</th></tr></thead>
             <tbody>
-              {users.map((user) => (
+              {visibleUsers.length ? visibleUsers.map((user) => (
                 <tr key={user.id}>
                   <td>{user.email}{user.id === currentUserId ? <small className="self-label">Você</small> : null}</td>
-                  <td>{user.role === 'admin' ? 'Administrador' : 'Operador'}</td>
+                  <td>{user.role === 'admin' ? 'Administrador' : user.role === 'monitoria' ? 'Monitoria' : user.role === 'operacional' ? 'Operacional' : 'Operador'}</td>
                   <td><span className={`status ${user.is_active ? 'active' : 'inactive'}`}>{user.is_active ? 'Ativo' : 'Inativo'}</span></td>
                   <td>{formatDate(user.last_activity)}</td>
                   <td className="user-actions">
                     <button onClick={() => startEditing(user)}>Editar</button>
                     {user.id !== currentUserId ? <button className="danger-button" onClick={() => resetPassword(user.id)}>Redefinir senha</button> : null}
+                    {user.id !== currentUserId ? <button className="danger-button" onClick={() => deleteUser(user)}>Excluir</button> : null}
                   </td>
                 </tr>
-              ))}
+              )) : <tr><td colSpan="5" className="empty">Nenhum usuário encontrado.</td></tr>}
             </tbody>
           </table>
         </div>
+        <footer className="pagination users-pagination">
+          <span>{filteredUsers.length ? `${(currentUserPage - 1) * usersPerPage + 1}-${Math.min(currentUserPage * usersPerPage, filteredUsers.length)} de ${filteredUsers.length}` : '0 usuários'}</span>
+          <div>
+            <button type="button" disabled={currentUserPage <= 1} onClick={() => setUserPage((page) => Math.max(1, page - 1))}>Anterior</button>
+            <span>Página {currentUserPage} de {userPages}</span>
+            <button type="button" disabled={currentUserPage >= userPages} onClick={() => setUserPage((page) => Math.min(userPages, page + 1))}>Próxima</button>
+          </div>
+        </footer>
       </section>
       {tempPassword ? (
         <div className="modal-backdrop" role="presentation">
@@ -594,6 +715,8 @@ function UsersView({ csrfToken, currentUserId, error, form, message, onCreate, o
               <label htmlFor="edit-user-role">Perfil</label>
               <select id="edit-user-role" value={editForm.role} disabled={editingUser.id === currentUserId} onChange={(event) => setEditForm({ ...editForm, role: event.target.value })}>
                 <option value="operador">Operador</option>
+                <option value="operacional">Operacional</option>
+                <option value="monitoria">Monitoria</option>
                 <option value="admin">Administrador</option>
               </select>
               {editingUser.id === currentUserId ? <small>Seu próprio perfil administrativo não pode ser removido.</small> : null}
@@ -639,70 +762,85 @@ function todayISO() {
   return new Date().toLocaleDateString('en-CA', { timeZone: TIMEZONE });
 }
 
-function weekAgoISO() {
-  const date = new Date();
-  date.setDate(date.getDate() - 7);
-  return date.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
-}
-
-function ReportsView() {
+function ReportsView({ users }) {
   const [rows, setRows] = useState([]);
-  const [dateFrom, setDateFrom] = useState(weekAgoISO);
+  const [dateFrom, setDateFrom] = useState(todayISO);
   const [dateTo, setDateTo] = useState(todayISO);
+  const [userId, setUserId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const loadReport = useCallback(async (from, to) => {
+  const loadReport = useCallback(async (from, to, selectedUserId = '', signal) => {
     if (!from || !to) return;
+    if (from > to) {
+      setRows([]);
+      setError('A data inicial não pode ser posterior à data final.');
+      return;
+    }
     setLoading(true);
     setError('');
     try {
-      const response = await fetch(`/api/admin/reports/productivity?from=${from}&to=${to}`, { credentials: 'same-origin' });
+      const params = new URLSearchParams({ from, to });
+      if (selectedUserId) params.set('user_id', selectedUserId);
+      const response = await fetch(`/api/admin/reports/productivity?${params}`, { credentials: 'same-origin', signal });
       if (!response.ok) throw new Error('Não foi possível carregar o relatório.');
       const data = await response.json();
       setRows(data.rows || []);
     } catch (requestError) {
+      if (requestError.name === 'AbortError') return;
       setError(requestError.message);
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, []);
 
-  useEffect(() => { loadReport(dateFrom, dateTo); }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    loadReport(dateFrom, dateTo, userId, controller.signal);
+    return () => controller.abort();
+  }, [dateFrom, dateTo, userId, loadReport]);
 
   function exportExcel() {
-    window.open(`/api/admin/reports/productivity/excel?from=${dateFrom}&to=${dateTo}`, '_blank');
+    const params = new URLSearchParams({ from: dateFrom, to: dateTo });
+    if (userId) params.set('user_id', userId);
+    window.open(`/api/admin/reports/productivity/excel?${params}`, '_blank');
   }
 
   const totalSimulations = rows.reduce((sum, row) => sum + (row.simulations || 0), 0);
-  const uniqueDays = new Set(rows.map((row) => row.report_date)).size;
   const uniqueConsultants = new Set(rows.map((row) => row.email)).size;
+  const reportUsers = [...users].sort((left, right) => (left.display_name || left.email).localeCompare(right.display_name || right.email, 'pt-BR'));
 
   return (
     <>
       <div className="report-filters">
         <div className="report-date-group">
-          <label htmlFor="report-from">De</label>
-          <input id="report-from" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+          <label htmlFor="report-date-from">Data inicial</label>
+          <input id="report-date-from" type="date" value={dateFrom} max={dateTo} onChange={(e) => setDateFrom(e.target.value)} />
         </div>
         <div className="report-date-group">
-          <label htmlFor="report-to">Até</label>
-          <input id="report-to" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          <label htmlFor="report-date-to">Data final</label>
+          <input id="report-date-to" type="date" value={dateTo} min={dateFrom} onChange={(e) => setDateTo(e.target.value)} />
         </div>
-        <button className="btn-primary" onClick={() => loadReport(dateFrom, dateTo)} disabled={loading}>{loading ? 'Carregando…' : 'Gerar relatório'}</button>
+        <div className="report-date-group report-person-group">
+          <label htmlFor="report-user">Pessoa</label>
+          <select id="report-user" value={userId} onChange={(e) => setUserId(e.target.value)}>
+            <option value="">Todas as pessoas</option>
+            {reportUsers.map((user) => <option key={user.id} value={user.id}>{user.display_name ? `${user.display_name} — ${user.email}` : user.email}</option>)}
+          </select>
+        </div>
         {rows.length ? <button className="btn-secondary" onClick={exportExcel}>Exportar Excel</button> : null}
       </div>
 
       <div className="metrics" style={{ marginBottom: '16px' }}>
         <Metric label="Total de simulações" value={totalSimulations} tone="accent" />
-        <Metric label="Dias com atividade" value={uniqueDays} />
+        <Metric label="Período" value={`${formatDateShort(dateFrom)} a ${formatDateShort(dateTo)}`} />
         <Metric label="Consultores ativos" value={uniqueConsultants} tone="success" />
       </div>
 
       {error ? <p className="admin-error">{error}</p> : null}
 
       <section className="surface">
-        <div className="surface-title"><h2>Produtividade por consultor</h2><strong style={{ color: '#ffad42' }}>{rows.length} registro{rows.length !== 1 ? 's' : ''}</strong></div>
+        <div className="surface-title"><h2>Produtividade por período</h2><strong style={{ color: '#ffad42' }}>{rows.length} registro{rows.length !== 1 ? 's' : ''}</strong></div>
         <div className="audit-table-wrap">
           <table className="audit-table report-table">
             <thead>
@@ -728,7 +866,7 @@ function ReportsView() {
                     <td><strong>{formatTMs(row.avg_seconds)}</strong></td>
                     <td><strong className="processed-count">{row.simulations}</strong></td>
                   </tr>
-                )) : <tr><td colSpan="7" className="empty">Nenhuma simulação encontrada no período.</td></tr>}
+                )) : <tr><td colSpan="7" className="empty">Nenhuma simulação encontrada para o período selecionado.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -837,6 +975,9 @@ function RestrictionsView({ csrfToken }) {
     <div className="restrictions-container">
       {error ? <p className="admin-error">{error}</p> : null}
       {message ? <p className="admin-success">{message}</p> : null}
+      <div className="restrictions-toolbar">
+        <button onClick={save} disabled={saving}>{saving ? 'Atualizando…' : 'Atualizar restrições'}</button>
+      </div>
       <section className="surface">
         <div className="surface-title">
           <h2>Bancos e operações</h2>
@@ -882,9 +1023,6 @@ function RestrictionsView({ csrfToken }) {
               );
             }) : <p className="empty">Nenhum banco encontrado na matriz comercial.</p>}
           </div>
-        </div>
-        <div className="restrictions-actions">
-          <button onClick={save} disabled={saving}>{saving ? 'Salvando…' : 'Salvar restrições'}</button>
         </div>
       </section>
     </div>

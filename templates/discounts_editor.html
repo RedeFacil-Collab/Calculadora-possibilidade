@@ -20,7 +20,9 @@
             <strong>{{ current_user.email }}</strong>
           </div>
           <a class="action-btn action-muted" href="{{ url_for('index') }}">Calculadora</a>
-          <a class="action-btn action-muted" href="{{ url_for('admin_dashboard') }}">Painel</a>
+          {% if current_user.role == "admin" %}
+            <a class="action-btn action-muted" href="{{ url_for('admin_dashboard') }}">Painel</a>
+          {% endif %}
           <button id="logout-button" class="action-btn action-logout" type="button">Sair</button>
         </div>
       </div>
@@ -34,51 +36,7 @@
         <div class="editor-alert editor-error">{{ error }}</div>
       {% endif %}
 
-      <section class="panel bank-management-panel">
-        <div class="bank-panel-head">
-          <span class="bank-panel-accent"></span>
-          <div>
-            <h2>Descontos do Pos-venda</h2>
-          </div>
-        </div>
-
-        <form method="post" class="editor-form editor-section-form">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="hidden" name="form_type" value="discounts">
-          <div class="editor-table-wrap">
-            <table class="editor-table">
-              <thead>
-                <tr>
-                  <th>Nome do Desconto</th>
-                  <th>Percentual</th>
-                  <th class="editor-actions-col">Acao</th>
-                </tr>
-              </thead>
-              <tbody id="discount-table-body">
-                {% for item in discounts %}
-                  <tr class="editor-row discount-row">
-                    <td>
-                      <input name="discount_name" type="text" value="{{ item['name'] }}" placeholder="Ex.: BB - Quitacao">
-                    </td>
-                    <td>
-                      <input name="discount_percent" type="number" step="0.01" value="{{ item['percent'] }}" placeholder="0.00">
-                    </td>
-                    <td class="editor-actions-col">
-                      <button class="action-btn action-danger action-small remove-row-btn" type="button">Remover</button>
-                    </td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-
-          <div class="toolbar editor-section-toolbar">
-            <button id="add-discount-row" class="action-btn action-muted" type="button">Adicionar desconto</button>
-            <button class="action-btn action-primary" type="submit">Salvar descontos</button>
-          </div>
-        </form>
-      </section>
-
+      {% if current_user.role == "admin" %}
       <section class="panel bank-management-panel">
         <div class="bank-panel-head">
           <span class="bank-panel-accent"></span>
@@ -105,6 +63,7 @@
           </div>
         </form>
       </section>
+      {% endif %}
 
       <section class="panel bank-management-panel">
         <div class="bank-panel-head">
@@ -145,6 +104,7 @@
           <button id="close-bank-modal" class="action-btn action-muted" type="button">Fechar</button>
         </div>
 
+        {% if current_user.role == "admin" %}
         <form method="post" enctype="multipart/form-data" class="bank-modal-logo-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="form_type" value="modal_bank_logo">
@@ -163,6 +123,7 @@
             </div>
           </div>
         </form>
+        {% endif %}
 
         <div class="bank-modal-add-row">
           <label class="bank-field compact">
@@ -191,21 +152,6 @@
       window.BANK_GROUPS_TJ = {{ bank_groups_tj|tojson }};
     </script>
     <script>
-      function bindDiscountRemoveButtons() {
-        document.querySelectorAll('#discount-table-body .remove-row-btn').forEach((button) => {
-          button.onclick = () => {
-            const rows = document.querySelectorAll('#discount-table-body .discount-row');
-            if (rows.length <= 1) {
-              rows[0].querySelectorAll('input').forEach((input) => {
-                input.value = '';
-              });
-              return;
-            }
-            button.closest('.discount-row').remove();
-          };
-        });
-      }
-
       const bankState = [
         ...(window.BANK_GROUPS_NORMAL || []).map((group) => ({
           bank: group.bank,
@@ -285,11 +231,16 @@
         const group = bankState[index];
         document.getElementById('bank-modal-title').textContent = group.bank;
         document.getElementById('bank-modal-subtitle').textContent = `${group.product === 'tj' ? 'Tabela TJ' : 'Tabela normal'} - ${group.factors.length} fatores cadastrados`;
-        document.getElementById('modal-bank-name').value = group.bank;
-        document.getElementById('modal-bank-product').value = group.product;
-        document.getElementById('bank-modal-logo-preview').innerHTML = group.logo_url
-          ? `<img src="${escapeHtml(group.logo_url)}" alt="Logo ${escapeHtml(group.bank)}" class="bank-summary-logo">`
-          : '<div class="bank-summary-logo-fallback">Sem logo</div>';
+        const modalBankName = document.getElementById('modal-bank-name');
+        const modalBankProduct = document.getElementById('modal-bank-product');
+        const modalLogoPreview = document.getElementById('bank-modal-logo-preview');
+        if (modalBankName) modalBankName.value = group.bank;
+        if (modalBankProduct) modalBankProduct.value = group.product;
+        if (modalLogoPreview) {
+          modalLogoPreview.innerHTML = group.logo_url
+            ? `<img src="${escapeHtml(group.logo_url)}" alt="Logo ${escapeHtml(group.bank)}" class="bank-summary-logo">`
+            : '<div class="bank-summary-logo-fallback">Sem logo</div>';
+        }
         document.getElementById('new-factor-installments').value = '';
         document.getElementById('new-factor-value').value = '';
         renderModalFactors();
@@ -379,20 +330,6 @@
       });
       document.getElementById('add-factor-to-modal').addEventListener('click', addFactorToActiveBank);
       document.getElementById('save-bank-factors').addEventListener('click', saveBankFactors);
-      document.getElementById('add-discount-row').addEventListener('click', () => {
-        const body = document.getElementById('discount-table-body');
-        const row = document.createElement('tr');
-        row.className = 'editor-row discount-row';
-        row.innerHTML = `
-          <td><input name="discount_name" type="text" placeholder="Ex.: BB - Quitacao"></td>
-          <td><input name="discount_percent" type="number" step="0.01" placeholder="0.00"></td>
-          <td class="editor-actions-col"><button class="action-btn action-danger action-small remove-row-btn" type="button">Remover</button></td>
-        `;
-        body.appendChild(row);
-        bindDiscountRemoveButtons();
-      });
-
-      bindDiscountRemoveButtons();
       renderBankSummary();
 
       const logoutButton = document.getElementById('logout-button');

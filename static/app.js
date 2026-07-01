@@ -442,7 +442,7 @@ function renderRows(focusOptions = {}) {
         <td class="highlight-value">${calculated.canApplyCommercialReference ? formatCurrency(calculated.commercialValue) : '-'}</td>
         <td class="row-actions-col">
           <div class="row-actions">
-            <button class="action-btn action-muted action-small edit-row" data-index="${index}" type="button">Editar</button>
+            ${isManual ? `<button class="action-btn action-muted action-small edit-row" data-index="${index}" type="button">Editar</button>` : ''}
             <button class="action-btn action-danger action-small delete-row" data-index="${index}" type="button">Excluir</button>
           </div>
         </td>

@@ -171,8 +171,10 @@ def require_authenticated_user():
     g.current_user = user
     auth_store.touch_user(user["id"])
     presence_store.mark_online(user["id"])
-    if request.path.startswith(("/discounts-editor", "/admin", "/api/admin/")) and user["role"] != "admin":
-        return "Acesso restrito a administradores.", 403
+    if request.path.startswith("/discounts-editor") and user["role"] not in {"admin", "operacional"}:
+        return "Acesso restrito a administradores e operacional.", 403
+    if request.path.startswith(("/admin", "/api/admin/")) and user["role"] not in {"admin", "monitoria"}:
+        return "Acesso restrito a administradores e monitoria.", 403
     return None
 
 
@@ -186,6 +188,14 @@ def require_role(*roles: str):
             return view(*args, **kwargs)
         return wrapped
     return decorator
+
+
+def user_landing_url(role: str):
+    if role in {"admin", "monitoria"}:
+        return url_for("admin_dashboard")
+    if role == "operacional":
+        return url_for("discounts_editor")
+    return url_for("index")
 
 
 def asset_url(filename: str) -> str:
@@ -422,7 +432,7 @@ def index():
 
 
 @app.get("/admin")
-@require_role("admin")
+@require_role("admin", "monitoria")
 def admin_dashboard():
     react_build_dir = BASE_DIR / "static" / "react"
     if not (react_build_dir / "admin.html").exists():
@@ -435,7 +445,7 @@ def login():
     if session.get("user_id"):
         user = auth_store.get_user(session["user_id"])
         if user:
-            return redirect(url_for("admin_dashboard") if user["role"] == "admin" else url_for("index"))
+            return redirect(user_landing_url(user["role"]))
     react_build_dir = BASE_DIR / "static" / "react"
     if not (react_build_dir / "index.html").exists():
         return "A interface de login ainda não foi compilada. Execute: npm --prefix client run build", 503
@@ -473,7 +483,7 @@ def api_login():
     auth_store.touch_user(user["id"])
     presence_store.mark_online(user["id"])
     auth_store.log("login_succeeded", ip, user["id"])
-    redirect_to = url_for("admin_dashboard") if user["role"] == "admin" else url_for("index")
+    redirect_to = user_landing_url(user["role"])
     return jsonify({"user": {"email": user["email"], "role": user["role"]}, "redirect_to": redirect_to})
 
 
@@ -509,7 +519,7 @@ def api_change_password():
     presence_store.mark_online(user_id)
     auth_store.log("password_changed_first_login", request_ip(), user_id)
     user = auth_store.get_user(user_id)
-    redirect_to = url_for("admin_dashboard") if user and user["role"] == "admin" else url_for("index")
+    redirect_to = user_landing_url(user["role"]) if user else url_for("index")
     return jsonify({"redirect_to": redirect_to})
 
 
@@ -525,7 +535,7 @@ def api_logout():
 
 
 @app.get("/api/admin/audit")
-@require_role("admin")
+@require_role("admin", "monitoria")
 def api_admin_audit():
     return jsonify(
         auth_store.list_audit_logs(
@@ -538,13 +548,13 @@ def api_admin_audit():
 
 
 @app.get("/api/admin/summary")
-@require_role("admin")
+@require_role("admin", "monitoria")
 def api_admin_summary():
     return jsonify(auth_store.audit_summary())
 
 
 @app.get("/api/admin/activity")
-@require_role("admin")
+@require_role("admin", "monitoria")
 def api_admin_activity():
     users = auth_store.list_users()
     online_user_ids = presence_store.online_user_ids([user["id"] for user in users])
@@ -552,7 +562,7 @@ def api_admin_activity():
 
 
 @app.get("/api/admin/activity/stream")
-@require_role("admin")
+@require_role("admin", "monitoria")
 def api_admin_activity_stream():
     @stream_with_context
     def event_stream():
@@ -585,7 +595,7 @@ def api_auth_heartbeat():
 
 
 @app.get("/api/admin/users")
-@require_role("admin")
+@require_role("admin", "monitoria")
 def api_admin_users():
     return jsonify({"users": auth_store.list_users()})
 
@@ -668,6 +678,28 @@ def api_admin_update_user(user_id: int):
     )
     presence_store.publish("users_changed", user_id)
     return jsonify({"user": user})
+
+
+@app.delete("/api/admin/users/<int:user_id>")
+@require_role("admin")
+def api_admin_delete_user(user_id: int):
+    if user_id == g.current_user["id"]:
+        return api_auth_error("Você não pode excluir sua própria conta.", 400)
+    try:
+        user = auth_store.delete_user(user_id)
+    except ValueError as error:
+        return api_auth_error(str(error), 404)
+
+    auth_store.log(
+        "user_deleted",
+        request_ip(),
+        g.current_user["id"],
+        details=f"Usuário {user['email']} excluído",
+        metadata={"deleted_user": user},
+    )
+    presence_store.mark_offline(user_id)
+    presence_store.publish("users_changed", user_id)
+    return "", 204
 
 
 @app.post("/api/admin/users/bulk")
@@ -765,35 +797,55 @@ def api_blocked_entities_put():
     items = payload.get("blocked", [])
     if not isinstance(items, list):
         return api_auth_error("Formato inválido.", 400)
+    previous_items = load_blocked_entities()
     save_blocked_entities(items)
+    saved_items = load_blocked_entities()
     auth_store.log(
         "blocked_entities_updated",
         request_ip(),
         g.current_user["id"],
-        details=f"{len(load_blocked_entities())} entidade(s) bloqueada(s)",
+        details=f"Restrições alteradas de {len(previous_items)} para {len(saved_items)} entidade(s)",
+        metadata={
+            "previous": previous_items,
+            "current": saved_items,
+        },
     )
-    return jsonify({"blocked": load_blocked_entities()})
+    return jsonify({"blocked": saved_items})
 
 
 @app.get("/api/admin/reports/productivity")
-@require_role("admin")
+@require_role("admin", "monitoria")
 def api_admin_productivity_report():
     date_from = request.args.get("from", "")
     date_to = request.args.get("to", "")
     if not date_from or not date_to:
         return api_auth_error("Informe os parâmetros 'from' e 'to'.", 400)
-    rows = auth_store.productivity_report(date_from, date_to)
+    user_id_raw = request.args.get("user_id", "").strip()
+    try:
+        user_id = int(user_id_raw) if user_id_raw else None
+    except ValueError:
+        return api_auth_error("Usuário inválido.", 400)
+    if user_id is not None and user_id <= 0:
+        return api_auth_error("Usuário inválido.", 400)
+    rows = auth_store.productivity_report(date_from, date_to, user_id=user_id)
     return jsonify({"rows": rows})
 
 
 @app.get("/api/admin/reports/productivity/excel")
-@require_role("admin")
+@require_role("admin", "monitoria")
 def api_admin_productivity_excel():
     date_from = request.args.get("from", "")
     date_to = request.args.get("to", "")
     if not date_from or not date_to:
         return api_auth_error("Informe os parâmetros 'from' e 'to'.", 400)
-    rows = auth_store.productivity_report(date_from, date_to)
+    user_id_raw = request.args.get("user_id", "").strip()
+    try:
+        user_id = int(user_id_raw) if user_id_raw else None
+    except ValueError:
+        return api_auth_error("Usuário inválido.", 400)
+    if user_id is not None and user_id <= 0:
+        return api_auth_error("Usuário inválido.", 400)
+    rows = auth_store.productivity_report(date_from, date_to, user_id=user_id)
 
     wb = Workbook()
     ws = wb.active
@@ -821,8 +873,8 @@ def api_admin_productivity_excel():
         ws.cell(row=row_index, column=1, value=row.get("email", ""))
         ws.cell(row=row_index, column=2, value=row.get("display_name", ""))
         ws.cell(row=row_index, column=3, value=str(row.get("report_date", "")))
-        ws.cell(row=row_index, column=4, value=first_at.strftime("%H:%M:%S") if first_at else "")
-        ws.cell(row=row_index, column=5, value=last_at.strftime("%H:%M:%S") if last_at else "")
+        ws.cell(row=row_index, column=4, value=str(first_at)[11:19] if first_at else "")
+        ws.cell(row=row_index, column=5, value=str(last_at)[11:19] if last_at else "")
         ws.cell(row=row_index, column=6, value=tms)
         ws.cell(row=row_index, column=7, value=row.get("simulations", 0))
 
@@ -914,12 +966,14 @@ def api_export_excel():
 
 
 @app.route("/discounts-editor", methods=["GET", "POST"])
-@require_role("admin")
+@require_role("admin", "operacional")
 def discounts_editor():
     error = None
     if request.method == "POST":
         try:
             form_type = request.form.get("form_type", "discounts")
+            if g.current_user["role"] == "operacional" and form_type != "bank_factors_payload":
+                return api_auth_error("O perfil operacional pode alterar somente fatores bancários.", 403)
             if form_type == "add_bank":
                 bank_name = request.form.get("bank_name", "").strip()
                 register_bank(bank_name)

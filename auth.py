@@ -8,12 +8,13 @@ import os
 from datetime import datetime, timezone
 
 import psycopg
+from psycopg.types.json import Jsonb
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from werkzeug.security import check_password_hash, generate_password_hash
 
 
-ROLES = {"admin", "operador"}
+ROLES = {"admin", "monitoria", "operacional", "operador"}
 
 
 class AuthStore:
@@ -39,7 +40,7 @@ class AuthStore:
                         id BIGSERIAL PRIMARY KEY,
                         email TEXT NOT NULL UNIQUE,
                         password_hash TEXT NOT NULL,
-                        role TEXT NOT NULL CHECK(role IN ('admin', 'operador')),
+                        role TEXT NOT NULL CHECK(role IN ('admin', 'monitoria', 'operacional', 'operador')),
                         is_active BOOLEAN NOT NULL DEFAULT TRUE,
                         last_seen_at TIMESTAMPTZ,
                         created_at TIMESTAMPTZ NOT NULL,
@@ -55,6 +56,27 @@ class AuthStore:
                 )
                 cursor.execute(
                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+                cursor.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ"
+                )
+                cursor.execute(
+                    """
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1
+                            FROM pg_constraint
+                            WHERE conrelid = 'users'::regclass
+                              AND conname = 'users_role_check'
+                              AND pg_get_constraintdef(oid) NOT LIKE '%operacional%'
+                        ) THEN
+                            ALTER TABLE users DROP CONSTRAINT users_role_check;
+                            ALTER TABLE users ADD CONSTRAINT users_role_check
+                                CHECK(role IN ('admin', 'monitoria', 'operacional', 'operador'));
+                        END IF;
+                    END $$
+                    """
                 )
                 cursor.execute(
                     """
@@ -79,6 +101,9 @@ class AuthStore:
                 cursor.execute(
                     "CREATE INDEX IF NOT EXISTS audit_logs_event_idx "
                     "ON audit_logs (event)"
+                )
+                cursor.execute(
+                    "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS metadata JSONB"
                 )
 
     def create_user(
@@ -178,6 +203,24 @@ class AuthStore:
             raise ValueError("Usuário não encontrado.")
         return dict(user)
 
+    def delete_user(self, user_id: int) -> dict:
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE users
+                    SET is_active = FALSE, last_seen_at = NULL,
+                        deleted_at = %s, updated_at = %s
+                    WHERE id = %s AND deleted_at IS NULL
+                    RETURNING id, email, role, display_name
+                    """,
+                    (_utc_now(), _utc_now(), user_id),
+                )
+                user = cursor.fetchone()
+        if not user:
+            raise ValueError("Usuário não encontrado.")
+        return dict(user)
+
     def verify_credentials(self, email: str, password: str) -> dict | None:
         with self._connect() as connection:
             with connection.cursor() as cursor:
@@ -185,7 +228,7 @@ class AuthStore:
                     """
                     SELECT id, email, password_hash, role, is_active, must_change_password
                     FROM users
-                    WHERE LOWER(email) = LOWER(%s)
+                    WHERE LOWER(email) = LOWER(%s) AND deleted_at IS NULL
                     """,
                     (email.strip(),),
                 )
@@ -203,7 +246,7 @@ class AuthStore:
         with self._connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT id, email, role, is_active, display_name FROM users WHERE id = %s",
+                    "SELECT id, email, role, is_active, display_name FROM users WHERE id = %s AND deleted_at IS NULL",
                     (user_id,),
                 )
                 user = cursor.fetchone()
@@ -238,15 +281,16 @@ class AuthStore:
         ip_address: str | None,
         user_id: int | None = None,
         details: str | None = None,
+        metadata: dict | None = None,
     ) -> None:
         with self._connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    INSERT INTO audit_logs (user_id, event, details, ip_address, created_at)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO audit_logs (user_id, event, details, metadata, ip_address, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     """,
-                    (user_id, event, details, ip_address, _utc_now()),
+                    (user_id, event, details, Jsonb(metadata) if metadata is not None else None, ip_address, _utc_now()),
                 )
 
     def list_audit_logs(
@@ -265,10 +309,10 @@ class AuthStore:
             parameters.append(event)
         if search:
             conditions.append(
-                "(users.email ILIKE %s OR logs.details ILIKE %s OR logs.ip_address ILIKE %s)"
+                "(users.email ILIKE %s OR logs.details ILIKE %s OR logs.ip_address ILIKE %s OR logs.metadata::text ILIKE %s)"
             )
             term = f"%{search}%"
-            parameters.extend([term, term, term])
+            parameters.extend([term, term, term, term])
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         with self._connect() as connection:
@@ -285,7 +329,7 @@ class AuthStore:
                 total = cursor.fetchone()["total"]
                 cursor.execute(
                     f"""
-                    SELECT logs.id, logs.event, logs.details, logs.ip_address,
+                    SELECT logs.id, logs.event, logs.details, logs.metadata, logs.ip_address,
                            logs.created_at, users.email
                     FROM audit_logs logs
                     LEFT JOIN users ON users.id = logs.user_id
@@ -315,7 +359,7 @@ class AuthStore:
                 )
                 grouped = {row["event"]: row["total"] for row in cursor.fetchall()}
                 cursor.execute(
-                    "SELECT COUNT(*) AS total FROM users WHERE is_active = TRUE"
+                    "SELECT COUNT(*) AS total FROM users WHERE is_active = TRUE AND deleted_at IS NULL"
                 )
                 active_users = cursor.fetchone()["total"]
                 cursor.execute("SELECT DISTINCT event FROM audit_logs ORDER BY event")
@@ -339,6 +383,7 @@ class AuthStore:
                            MAX(audit_logs.created_at) AS last_activity
                     FROM users
                     LEFT JOIN audit_logs ON audit_logs.user_id = users.id
+                    WHERE users.deleted_at IS NULL
                     GROUP BY users.id
                     ORDER BY users.email
                     """
@@ -362,6 +407,7 @@ class AuthStore:
                            ) AS last_table_processed_at
                     FROM users
                     LEFT JOIN audit_logs ON audit_logs.user_id = users.id
+                    WHERE users.deleted_at IS NULL
                     GROUP BY users.id
                     ORDER BY tables_processed DESC, users.email
                     """
@@ -395,11 +441,17 @@ class AuthStore:
         }
 
 
-    def productivity_report(self, date_from: str, date_to: str) -> list[dict]:
+    def productivity_report(self, date_from: str, date_to: str, user_id: int | None = None) -> list[dict]:
+        user_filter = ""
+        parameters: list[object] = [date_from, date_to]
+        if user_id is not None:
+            user_filter = "AND logs.user_id = %s"
+            parameters.append(user_id)
+
         with self._connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    """
+                    f"""
                     SELECT
                         users.email,
                         users.display_name,
@@ -415,11 +467,12 @@ class AuthStore:
                     WHERE logs.event = 'table_processed'
                       AND DATE(logs.created_at AT TIME ZONE 'America/Sao_Paulo') >= %s
                       AND DATE(logs.created_at AT TIME ZONE 'America/Sao_Paulo') <= %s
+                      {user_filter}
                     GROUP BY users.id, users.email, users.display_name,
                              DATE(logs.created_at AT TIME ZONE 'America/Sao_Paulo')
                     ORDER BY report_date DESC, users.email
                     """,
-                    (date_from, date_to),
+                    tuple(parameters),
                 )
                 rows = []
                 for row in cursor.fetchall():
